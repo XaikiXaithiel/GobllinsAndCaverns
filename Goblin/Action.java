@@ -1,27 +1,33 @@
-package package1;
+package Goblin;
 
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 
-public class Actions implements ActionListener {
+public class Action implements ActionListener {
 
-    GameMain gm;
+    Main gm;
 
-    public Actions(GameMain gm){
+    public Action(Main gm) {
+        
         this.gm = gm;
+
     }
 
     @Override
     public void actionPerformed(ActionEvent e) {
+        
         String yourChoice = e.getActionCommand();
 
         switch (yourChoice) {
             case "useSpell":
-                gm.ui.areaText.setText("light spell used");
+                gm.ui.areaText.setText( "You used a Light Spell!");
                 break;
-            case "runInside":
-                gm.ui.areaText.setText("you ran inside");
+        
+            case "enterCave":
+                gm.ui.areaText.setText( "You ran inside!");
                 break;
         }
-    }
+
+    } 
+
 }

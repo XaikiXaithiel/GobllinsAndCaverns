@@ -10,6 +10,5 @@ public class Event {
 
     }
 
-    // talk to other members about this <3
 
 }

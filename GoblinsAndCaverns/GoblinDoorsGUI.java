@@ -1,0 +1,2239 @@
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.awt.geom.*;
+import java.awt.image.BufferedImage;
+import java.util.*;
+import java.util.List;
+import java.util.function.*;
+
+/**
+ * GOBLINS AND CAVERNS - GUI version (Java Swing, no external assets).
+ * All pixel art is drawn in code on a 320x240 canvas and scaled up 3x.
+ *
+ * The whole game lives on a 960x720 virtual canvas. It runs 1:1 in a 960x720 window and scales
+ * cleanly to Fullscreen 1920x1080 (the extra width is filled with cavern wall).
+ *
+ * Rules
+ *  - 30 HP. Walking into a snake's cave costs 10 HP. 0 HP = game over.
+ *  - 2 Light Spells per round. A Light Spell lights up one cave entrance so you can peek inside.
+ *  - Rounds 1-2: 3 cave entrances. Rounds 3-5: 5 cave entrances.
+ *  - Items are usable: Mana Potion (+1 Light Spell), Map (seals off a dangerous cave),
+ *    Grimoire (ward blocks the next snake bite), Old Charm (+10 HP).
+ *
+ * Controls: click / SPACE / ENTER to advance, Y / N for yes-no, click a cave or press 1-5,
+ *           click an item (top right) or press P / M / G / C to use it, F11 = fullscreen.
+ */
+public class GoblinDoorsGUI extends JPanel {
+
+    // ---------- Sizes ----------
+    static final int W = 320, H = 240, SH = 160, S = 3;     // logical canvas, scene height, scale
+    static final int PW = W * S, PH = H * S;
+    static final int HP_MAX = 30, SNAKE_DMG = 10, MAXN = 5;
+
+    // ---------- Story data (index = round - 1) ----------
+    static final String[] ITEMS = {"Mana Potion", "Map of the Village", "Grimoire", "Old Charm"};
+    static final String[] ITEM_DESC = {
+        "Refills 1 Light Spell.",
+        "Marks a dangerous cave and seals it off.",
+        "Casts a ward that blocks the next snake bite.",
+        "Restores 10 HP."
+    };
+    static final char[] ITEM_KEY = {'P', 'M', 'G', 'C'};
+    static final String[] ITEM_SHORT = {
+        "POTION: +1 Light Spell [P]", "MAP: Seals a dangerous cave [M]",
+        "GRIMOIRE: Blocks a snake bite [G]", "OLD CHARM: +10 HP [C]"
+    };
+    static final String[] MEMORIES = {
+        "A voice echoes: \"Promise me you'll use your magic to protect people.\"",
+        "The village you are traveling to... you have been there before.",
+        "The Grimoire shows you a spell you once used. Your hands remember it.",
+        "The Old Charm was given to you by your master. You remember their smile."
+    };
+    static final String[] MEMORY_NOTES = {
+        "The potion reminds you of the days your mana began disappearing.",
+        "Why would you forget a place you once visited?",
+        "That spell was far too strong...",
+        "\"Be careful, my student. Power is not the same as control.\""
+    };
+    static final String SEAL = "Curse's Seal";
+
+    enum PathType { ITEM, SNAKE, DEAD_END }
+    enum Scene { TITLE, CAMP, TUNNEL, DOORS, FINAL, MEMORY, FORGIVE, ATONE }
+    enum Mode { NONE, TEXT, AUTO, YESNO, DOOR, MENU, END, OVER }
+    enum Panel { NONE, SETTINGS, TUTORIAL, HELP, INFO }
+
+    // ---------- Pixel art ----------
+    static final Map<Character, Color> PAL = new HashMap<>();
+    static {
+        PAL.put('h', new Color(40, 50, 120));   PAL.put('H', new Color(75, 95, 175));
+        PAL.put('s', new Color(240, 200, 160)); PAL.put('e', new Color(30, 30, 40));
+        PAL.put('b', new Color(230, 230, 235)); PAL.put('r', new Color(95, 60, 155));
+        PAL.put('R', new Color(60, 40, 110));   PAL.put('k', new Color(35, 30, 40));
+        PAL.put('y', new Color(255, 241, 168)); PAL.put('g', new Color(95, 165, 70));
+        PAL.put('G', new Color(50, 110, 50));   PAL.put('Y', new Color(255, 240, 90));
+        PAL.put('c', new Color(130, 90, 50));   PAL.put('p', new Color(75, 45, 100));
+        PAL.put('P', new Color(40, 20, 55));    PAL.put('x', new Color(225, 55, 55));
+        PAL.put('w', new Color(250, 250, 250)); PAL.put('B', new Color(120, 200, 255));
+        PAL.put('n', new Color(150, 100, 50));  PAL.put('N', new Color(100, 65, 30));
+        PAL.put('M', new Color(225, 205, 150)); PAL.put('m', new Color(110, 30, 40));
+    }
+
+    static final String[] GOBLIN = {
+        "..g........g..",
+        ".ggg......ggg.",
+        "..gggggggggg..",
+        "..ggYkggYkgg..",
+        "..gggggggggg..",
+        "..ggkmmmmkgg..",
+        "...gggggggg...",
+        "..cccccccccc..",
+        ".gccccccccccg.",
+        ".g.cccccccc.g.",
+        "...cccccccc...",
+        "...cc....cc...",
+        "..kkk....kkk.."
+    };
+    static final String[] SNAKE = {
+        ".....gggg.....",
+        "....gYggYg....",
+        "....gggggg....",
+        ".....gGgg.xx..",
+        "......gg......",
+        ".....gGgg.....",
+        "..gggGggggg...",
+        ".ggGggggGgggg.",
+        ".gggggggggggG.",
+        "..GGggGgGGGG.."
+    };
+    static final String[][] ICONS = {
+        { "..kkkk..", "...nn...", "...kk...", "..kBBk..", ".kBBBBk.", ".kBBwBk.", ".kBBBBk.", "..kkkk.." },
+        { ".kkkkkk.", "kMMMMxMk", "kMxMMMMk", "kMMMxMMk", "kMMxxxMk", "kMMMMMMk", "kMxMMMMk", ".kkkkkk." },
+        { ".kkkkkk.", "kRRRRRRk", "kRyyyyRk", "kRyrryRk", "kRyrryRk", "kRyyyyRk", "kRRRRRRk", ".kkkkkk." },
+        { "...yy...", "..y..y..", "..y..y..", "..kkkk..", ".kyBByk.", ".kyBByk.", ".kyyyyk.", "..kkkk.." },
+        { "..xxxx..", ".xxxxxx.", "xxxwwxxx", "xxwxxwxx", "xxwxxwxx", "xxxwwxxx", ".xxxxxx.", "..xxxx.." }
+    };
+    static final Map<Character, Color> PAST = new HashMap<>();
+    static {
+        PAST.put('r', new Color(255, 241, 168)); PAST.put('R', new Color(255, 241, 168));
+        PAST.put('h', new Color(250, 245, 220)); PAST.put('H', new Color(255, 255, 255));
+        PAST.put('k', new Color(200, 160, 80));
+    }
+
+    static void sprite(Graphics2D g, String[] rows, int x, int y, int sc, Color mono,
+                       Map<Character, Color> ov, boolean flip) {
+        for (int r = 0; r < rows.length; r++) {
+            String row = rows[r];
+            int n = row.length();
+            for (int c = 0; c < n; c++) {
+                char ch = row.charAt(c);
+                if (ch == '.') continue;
+                Color col = mono != null ? mono : (ov != null && ov.containsKey(ch) ? ov.get(ch) : PAL.get(ch));
+                if (col == null) continue;
+                int cx = flip ? (n - 1 - c) : c;
+                g.setColor(col);
+                g.fillRect(x + cx * sc, y + r * sc, sc, sc);
+            }
+        }
+    }
+
+    static int iconFor(String name) {
+        for (int i = 0; i < ITEMS.length; i++) if (ITEMS[i].equals(name)) return i;
+        return 4;
+    }
+
+    static String roman(int i) { return new String[]{"I", "II", "III", "IV", "V"}[i]; }
+
+    // ---------- Cave entrance geometry (logical px) ----------
+    // Rounds 1-2 show 3 big entrances, rounds 3-5 show 5 narrower ones. They always end at the cavern floor line (y = 98).
+    int dw() { return nDoors == 3 ? 48 : 38; }
+    int dh() { return nDoors == 3 ? 64 : 60; }
+    int dy() { return 98 - dh(); }
+    int dx(int i) { return nDoors == 3 ? 56 + 80 * i : 23 + 59 * i; }
+
+    /** Irregular cave-mouth outline: jagged sides and a lumpy, rough top. The same seed always gives the same
+     *  random sequence, so the opening (grow 0) and its rock surround (grow > 0) line up. */
+    static List<Point2D> caveOutline(int x, int y, int w, int h, int grow, long seed) {
+        List<Point2D> out = new ArrayList<>();
+        Random r = new Random(seed);
+        double cx = x + w / 2.0, cy = y + w / 2.0, rad = w / 2.0;
+        int side = 5;
+        for (int k = 0; k <= side; k++) {
+            double yy = y + h - (h - w / 2.0) * k / side;
+            double t = grow * (0.5 + r.nextDouble()), j = (r.nextDouble() - 0.5) * 3;
+            out.add(new Point2D.Double(x - t + j, yy));
+        }
+        for (int k = 1; k <= 16; k++) {
+            double ang = Math.PI + Math.PI * k / 17.0;
+            double t = grow * (0.5 + r.nextDouble()), j1 = (r.nextDouble() - 0.5) * 3, j2 = (r.nextDouble() - 0.5) * 3;
+            out.add(new Point2D.Double(cx + (rad + t) * Math.cos(ang) + j1, cy + (rad + t) * Math.sin(ang) + j2));
+        }
+        for (int k = 0; k <= side; k++) {
+            double yy = y + w / 2.0 + (h - w / 2.0) * k / side;
+            double t = grow * (0.5 + r.nextDouble()), j = (r.nextDouble() - 0.5) * 3;
+            out.add(new Point2D.Double(x + w + t + j, yy));
+        }
+        return out;
+    }
+
+    static Path2D caveShape(int x, int y, int w, int h, int grow, long seed) {
+        List<Point2D> pts = caveOutline(x, y, w, h, grow, seed);
+        Path2D.Float p = new Path2D.Float();
+        for (int i = 0; i < pts.size(); i++) {
+            Point2D q = pts.get(i);
+            if (i == 0) p.moveTo(q.getX(), q.getY()); else p.lineTo(q.getX(), q.getY());
+        }
+        p.closePath();
+        return p;
+    }
+
+    // ---------- Game state ----------
+    int hp = HP_MAX;
+    double hpShown = HP_MAX;
+    final List<String> inventory = new ArrayList<>();      // everything recovered so far
+    final Set<String> used = new HashSet<>();              // consumed items
+    boolean ward, practice, lastBlocked;
+    int roundNo = 0, spells = 2, maxSpells = 2, nDoors = 3;
+    final PathType[] types = new PathType[MAXN];
+    final boolean[] open = new boolean[MAXN];
+    final boolean[] peek = new boolean[MAXN];
+    final boolean[] doorOpen = new boolean[MAXN];
+    final int[] blocked = new int[MAXN];            // 0 none, 1 snake, 2 dead end, 3 sealed by map
+    int itemShow = -1;
+    String endingName = "";
+    String doorPurpose = "";                         // "light" or "walk"
+    final Random rng = new Random();
+
+    Scene scene = Scene.TITLE;
+    Scene previousScene = Scene.TITLE;
+    float sceneFade = 1f;
+    boolean sleeping, lumen, goblinVisible;
+
+    // ---------- Script engine ----------
+    interface Step { void run(); }
+    static class Log { final String t; final long at; Log(String t, long at) { this.t = t; this.at = at; } }
+
+    final Deque<Step> queue = new ArrayDeque<>();
+    final List<Log> logs = new ArrayList<>();
+    Mode mode = Mode.NONE;
+    boolean blocking;
+    String cur = "";
+    boolean curSys;
+    double reveal;
+    long autoAt;
+    Consumer<Boolean> yesNoCb;
+    IntConsumer doorCb;
+    final GameAudio audio = new GameAudio(message -> System.err.println(message));
+    boolean paused;
+    boolean confirmingExit;
+    long pauseStartedAt;
+
+    // ---------- Visual state ----------
+    int frame;
+    double flash, hurt, shake;
+    Point mouse = new Point(-1, -1);
+    final BufferedImage buf = new BufferedImage(W, H, BufferedImage.TYPE_INT_ARGB);
+    BufferedImage bgCave, bgTitle, sideTile;
+    BufferedImage dialogueIndicator;
+    ImageIcon menuBackground;
+    ImageIcon nightVillage, wizardCharacter;
+    ImageIcon dialogueBox, heartFilled, heartEmpty;
+    Image menuPlay, menuHelp, menuInfo, menuSettings;
+    boolean openingVillage;
+    final Font fText = pixelFont(Font.BOLD, 22);
+    final Font fSys = pixelFont(Font.BOLD, 18);
+    final Font fHud = pixelFont(Font.BOLD, 16);
+    final Rectangle yesRect = new Rectangle(300, 628, 150, 50);
+    final Rectangle noRect = new Rectangle(510, 628, 150, 50);
+    final Rectangle againRect = new Rectangle(230, 600, 240, 56);
+    final Rectangle menuRect = new Rectangle(490, 600, 240, 56);
+    final Rectangle pauseRect = new Rectangle(20, 10, 54, 54);
+    final Rectangle resumeRect = new Rectangle(340, 286, 280, 64);
+    final Rectangle pauseMenuRect = new Rectangle(340, 372, 280, 64);
+    final Rectangle pauseExitRect = new Rectangle(340, 458, 280, 64);
+
+    // ---------- Main menu (all coordinates are in the 960x720 virtual canvas) ----------
+    static final int PLAY_W = 150, PLAY_H = 172, PLAY_X = 413, PLAY_Y = 241;   // play triangle bounding box
+    static final int ICON_Y = 574, QMARK_X = 418, INFO_X = 480, GEAR_X = 542, ICON_R = 22, GEAR_R = 30;
+    final Rectangle tutorialRect = new Rectangle(174, 450, 196, 66);
+    final Rectangle practiceRect = new Rectangle(382, 450, 196, 66);
+    final Rectangle exitRect     = new Rectangle(590, 450, 196, 66);
+    final Rectangle fsRect       = new Rectangle(520, 245, 170, 50);   // settings: fullscreen toggle
+    final Rectangle muteRect     = new Rectangle(520, 315, 170, 50);   // settings: mute toggle
+    final Rectangle volumeSliderRect = new Rectangle(520, 410, 170, 28);
+    final Rectangle menuPlayRect = new Rectangle(380, 210, 200, 250);
+    final Rectangle menuHelpRect = new Rectangle(368, 550, 62, 62);
+    final Rectangle menuInfoRect = new Rectangle(449, 550, 62, 62);
+    final Rectangle menuSettingsRect = new Rectangle(530, 550, 62, 62);
+    final Rectangle backRect     = new Rectangle(380, 480, 200, 52);   // settings: back
+    final Rectangle panelRect    = new Rectangle(110, 110, 740, 500);  // tutorial / help / info panel
+    final Rectangle closeRect    = new Rectangle(390, 548, 180, 50);
+    final Rectangle prevRect     = new Rectangle(140, 548, 170, 50);
+    final Rectangle nextRect     = new Rectangle(650, 548, 170, 50);
+    Panel panel = Panel.NONE;
+    int tutPage;
+    boolean fullscreen;
+    JFrame window;                     // set by main(); null when rendered headless
+    Rectangle windowedBounds;
+    JPanel windowRoot, titleBar;
+    double scale = 1, offX, offY;      // virtual canvas -> window mapping (letterboxed)
+
+    static final String[] TUT_TITLES = {"THE CAVERN", "LIGHT SPELLS", "HP & SNAKES", "ITEMS"};
+    static final String[] TUT_TEXT = {
+        "A thief stole your belongings and fled into a big cavern full of dark cave entrances. "
+        + "Each round you must choose ONE cave to walk into. Rounds 1-2 show 3 caves. Rounds 3-5 show 5 caves. "
+        + "One cave holds your stolen item. The others hide snakes or dead ends.",
+        "You can cast 2 Light Spells every round. A Light Spell lights up one cave entrance so you can peek inside: "
+        + "you will see an item, a snake, or a dead end. The light fades after a moment, so remember what you saw! "
+        + "Your Light Spells refill at the start of every round.",
+        "You have 30 HP for the whole journey. Walking into a snake's cave costs 10 HP. "
+        + "A dead end costs nothing, but the cave collapses and cannot be used again. "
+        + "If your HP reaches 0, it is game over."
+    };
+
+    static Font loadPixelFont() {
+        try {
+            java.io.File file = GameAssets.resolveFile("fonts/Pixelpurl-0vBPP.ttf");
+            if (file == null) throw new java.io.FileNotFoundException("fonts/Pixelpurl-0vBPP.ttf");
+            Font font = Font.createFont(Font.TRUETYPE_FONT, file);
+            GraphicsEnvironment.getLocalGraphicsEnvironment().registerFont(font);
+            return font;
+        } catch (Exception e) {
+            System.err.println("Could not load Pixelpurl: " + e.getMessage());
+        }
+        return new Font(Font.MONOSPACED, Font.PLAIN, 12);
+    }
+
+    static final Font PIXEL_FONT = loadPixelFont();
+
+    static Font pixelFont(int style, float size) {
+        return PIXEL_FONT.deriveFont(style, size * 1.2f);
+    }
+
+    // =====================================================================
+    //  Script helpers
+    // =====================================================================
+    Step say(String t) {
+        return () -> { cur = t; curSys = false; reveal = 0; mode = Mode.TEXT; blocking = true; };
+    }
+    Step sys(String t) {
+        return () -> {
+            toast(t);
+            mode = Mode.AUTO; autoAt = System.currentTimeMillis() + 450; blocking = true;
+        };
+    }
+    Step act(Runnable r) { return r::run; }
+    Step askYesNo(String q, Consumer<Boolean> cb) {
+        return () -> { cur = q; curSys = true; reveal = 0; yesNoCb = cb; mode = Mode.YESNO; blocking = true; };
+    }
+    Step askDoor(String purpose, String q, IntConsumer cb) {
+        return () -> { cur = q; curSys = true; reveal = 0; doorCb = cb; doorPurpose = purpose; mode = Mode.DOOR; blocking = true; };
+    }
+    Step endStep()   { return () -> { mode = Mode.END; blocking = true; }; }
+    Step overStep()  { return () -> { mode = Mode.OVER; blocking = true; }; }
+
+    void toast(String t) {
+        logs.add(new Log(t, System.currentTimeMillis()));
+        if (logs.size() > 5) logs.remove(0);
+    }
+
+    void insert(Step... steps) { for (int i = steps.length - 1; i >= 0; i--) queue.addFirst(steps[i]); }
+    void insert(List<Step> l) { insert(l.toArray(new Step[0])); }
+
+    void proceed() {
+        while (true) {
+            Step s = queue.pollFirst();
+            if (s == null) return;
+            blocking = false;
+            s.run();
+            if (blocking) return;
+        }
+    }
+
+    void answerYesNo(boolean v) {
+        Consumer<Boolean> cb = yesNoCb; yesNoCb = null;
+        mode = Mode.NONE;
+        if (cb != null) cb.accept(v);
+        proceed();
+    }
+    void answerDoor(int i) {
+        IntConsumer cb = doorCb; doorCb = null;
+        mode = Mode.NONE;
+        if (cb != null) cb.accept(i);
+        proceed();
+    }
+
+    // =====================================================================
+    //  Game logic
+    // =====================================================================
+    /** A snake bite: -10 HP, unless a Grimoire ward is up. */
+    void snakeBite() {
+        if (ward) {
+            ward = false; lastBlocked = true;
+            flash = 0.5;
+            toast("WARD ABSORBED THE BITE");
+            return;
+        }
+        lastBlocked = false;
+        hp = Math.max(0, hp - SNAKE_DMG);
+        hurt = 1; shake = 9;
+        toast("SNAKE BITE: -" + SNAKE_DMG + " HP");
+        if (hp == 0) {
+            queue.clear();
+            insert(say("The venom spreads fast. His light flickers out, and the mage collapses in the dark..."),
+                   sys("GAME OVER"), overStep());
+        }
+    }
+
+    void resetCaves() {
+        Arrays.fill(open, true); Arrays.fill(peek, false);
+        Arrays.fill(doorOpen, false); Arrays.fill(blocked, 0);
+    }
+
+    void resetRun() {
+        audio.stopNarration();
+        audio.stopMenuMusic();
+        hp = HP_MAX; hpShown = HP_MAX; ward = false; lastBlocked = false;
+        inventory.clear(); used.clear(); logs.clear(); queue.clear();
+        roundNo = 0; spells = 2; maxSpells = 2; nDoors = 3; itemShow = -1;
+        sleeping = false; lumen = false; goblinVisible = false;
+        Arrays.fill(types, PathType.DEAD_END);
+        resetCaves();
+        flash = hurt = shake = 0;
+        cur = ""; reveal = 0; yesNoCb = null; doorCb = null; blocking = false;
+        paused = false; confirmingExit = false; pauseStartedAt = 0;
+    }
+
+    /** Shows the main menu. */
+    void begin() {
+        scene = Scene.TITLE;
+        mode = Mode.MENU;
+        panel = Panel.NONE;
+        audio.playMenuMusic();
+    }
+
+    void toMenu() { resetRun(); begin(); }
+
+    /** Leaves the menu and starts the story. */
+    void launch() {
+        practice = false;
+        resetRun();
+        mode = Mode.NONE;
+        startGame();
+        proceed();
+    }
+
+    /** Leaves the menu and starts a short practice run (no story, all items supplied). */
+    void launchPractice() {
+        practice = true;
+        resetRun();
+        mode = Mode.NONE;
+        insert(
+            act(() -> { scene = Scene.DOORS; lumen = true; }),
+            sys("PRACTICE MODE"),
+            sys("All 4 items are in your pack."),
+            act(() -> {
+                for (String it : ITEMS) inventory.add(it);
+                startRound(1);
+            })
+        );
+        proceed();
+    }
+
+    void restart() { if (practice) launchPractice(); else launch(); }
+
+    void practiceDone() {
+        endingName = "Practice";
+        insert(sys("PRACTICE COMPLETE"), endStep());
+    }
+
+    void startGame() {
+        insert(
+            act(() -> { scene = Scene.CAMP; sleeping = false; lumen = false; openingVillage = true; }),
+            act(() -> audio.playNarration("audio/theMage.wav")),
+            say("A mage travels through the forest, hoping to reach a village before night falls."),
+            say("Someone there is said to know how to lift his curse - the [Curse of Mana]."),
+            say("The curse weakens his magic. He avoids casting unless absolutely necessary."),
+            say("But after hours of walking, he still can't find the way out. Night has come."),
+            act(() -> openingVillage = false),
+            say("He finds a cave and sets down his things:"),
+            act(() -> inventory.addAll(Arrays.asList(ITEMS[0], ITEMS[1], ITEMS[2], ITEMS[3], SEAL))),
+            sys("Mana Potion"), sys("Map of the Village"), sys("Grimoire"), sys("Old Charm"), sys("Curse's Seal"),
+            say("He rests... until his eyes grow heavy."),
+            act(() -> sleeping = true),
+            say("*Rustle.*"),
+            act(() -> { sleeping = false; inventory.clear(); flash = 0.6; shake = 6; }),
+            say("His eyes snap open. His belongings are gone!"),
+            say("Luckily, the thief was careless. Small footprints lead deeper into the cave."),
+            act(() -> scene = Scene.TUNNEL),
+            say("The deeper he goes, the darker it becomes."),
+            say("He casts \"Lumen\". A faint light appears above his palm."),
+            act(() -> lumen = true),
+            say("\"I can't keep doing this,\" he mutters. \"I can only spare a couple of these each time.\""),
+            say("The footprints suddenly disappear. The tunnel opens into a huge cavern, its walls pocked with dark cave entrances."),
+            act(() -> { scene = Scene.DOORS; roundNo = 0; nDoors = 3; resetCaves(); }),
+            sys("Entered the Caverns of Paths"),
+            sys("Objective: Retrieve your belongings."),
+            sys("Rule: Choose ONE cave at every junction."),
+            sys("Warning: Not every cave hides the thief."),
+            say("\"...What?\""),
+            act(() -> startRound(1))
+        );
+    }
+
+    void startRound(int r) {
+        roundNo = r; spells = 2; maxSpells = 2;
+        nDoors = r <= 2 ? 3 : 5;
+        List<PathType> t = new ArrayList<>();
+        t.add(PathType.ITEM);
+        t.add(PathType.SNAKE);
+        if (nDoors == 5) t.add(PathType.SNAKE);
+        while (t.size() < nDoors) t.add(PathType.DEAD_END);
+        Collections.shuffle(t, rng);
+        for (int i = 0; i < MAXN; i++) types[i] = i < nDoors ? t.get(i) : PathType.DEAD_END;
+        resetCaves();
+        itemShow = -1;
+        scene = Scene.DOORS;
+        if (practice) used.clear();
+
+        List<Step> L = new ArrayList<>();
+        if (r == 5 && !practice) L.add(say("The thief's trail ends here. Five dark caves... and one of them hides the Seal."));
+        L.add(sys(r == 5 ? "FINAL ROUND" : "ROUND " + r));
+        L.add(sys(nDoors + " CAVE ENTRANCES"));
+        L.add(sys("LIGHT SPELLS: 2/2"));
+        if (r == 1 && !practice) { L.add(sys("Tip: Light up a cave to peek inside.")); L.add(sys("Warning: A snake bite costs 10 HP.")); }
+        if (r == 2 && !practice) L.add(sys("WARNING: Memories may affect your choices."));
+        if (r == 3 && !practice) L.add(sys("Two snakes now lurk among the caves."));
+        L.add(act(this::lightPhase));
+        insert(L);
+    }
+
+    void lightPhase() {
+        if (spells <= 0) {
+            insert(sys("No Light Spells left. You must choose."), act(this::walkPhase));
+            return;
+        }
+        insert(askYesNo("Use a Light Spell?", yes -> {
+            if (!yes) { insert(act(this::walkPhase)); return; }
+            insert(askDoor("light", "Which cave entrance would you like to light up?", v -> {
+                final int left = spells - 1;
+                final int r = roundNo;
+                String desc;
+                switch (types[v]) {
+                    case ITEM:
+                        desc = r == 5 ? "The light finds a faint red glow deep inside cave " + roman(v) + "... and something watching from the dark."
+                                      : "The darkness fades. Something glints on the floor of cave " + roman(v) + "...";
+                        break;
+                    case SNAKE: desc = "The darkness fades. Cave " + roman(v) + " is alive with coiled shapes and a low, hungry hiss..."; break;
+                    default:    desc = "The darkness fades. Cave " + roman(v) + " ends in a solid wall of fallen rock..."; break;
+                }
+                insert(
+                    act(() -> { spells--; flash = 0.3; }),
+                    act(() -> peek[v] = true),
+                    sys("Light Spell Used"),
+                    sys("Remaining Spells: " + left + "/" + maxSpells),
+                    say(desc),
+                    say("The light fades little by little."),
+                    act(() -> peek[v] = false),
+                    sys("LIGHT ENDED"),
+                    askYesNo("Would you like to choose the cave you'll walk into?", chosen -> {
+                        if (chosen) insert(act(this::walkPhase));
+                        else if (spells > 0) insert(sys("Remaining Light Spells: " + spells + "/" + maxSpells), act(this::lightPhase));
+                        else insert(sys("No Light Spells left. You must choose."), act(this::walkPhase));
+                    })
+                );
+            }));
+        }));
+    }
+
+    void walkPhase() {
+        insert(askDoor("walk", "Which cave would you like to walk into?", p -> {
+            final int r = roundNo;
+            List<Step> L = new ArrayList<>();
+            L.add(say("He walks into cave " + roman(p) + "..."));
+            L.add(act(() -> doorOpen[p] = true));
+            switch (types[p]) {
+                case ITEM: {
+                    if (practice) {
+                        L.add(say("Practice: you found the item for round " + r + "!"));
+                        L.add(act(() -> { itemShow = r - 1; flash = 0.5; }));
+                        L.add(say(r < 5 ? "Nice work. On to the next round." : "That was the last round."));
+                        L.add(act(() -> { itemShow = -1; if (r < 5) startRound(r + 1); else practiceDone(); }));
+                    } else if (r == 5) {
+                        L.add(act(this::finalRound));
+                    } else {
+                        final String item = ITEMS[r - 1];
+                        L.add(say("He finds his item on the cave floor: " + item + "!"));
+                        L.add(act(() -> { inventory.add(item); itemShow = r - 1; flash = 0.5; }));
+                        L.add(sys("One item recovered"));
+                        L.add(sys((5 - r) + " items remaining."));
+                        L.add(sys(ITEM_SHORT[r - 1]));
+                        L.add(say("Upon touching it, a memory flashes through his mind..."));
+                        L.add(say(MEMORIES[r - 1]));
+                        L.add(say(MEMORY_NOTES[r - 1]));
+                        L.add(act(() -> { itemShow = -1; startRound(r + 1); }));
+                    }
+                    break;
+                }
+                case SNAKE:
+                    L.add(say("A snake uncoils in the dark and lunges!"));
+                    L.add(act(this::snakeBite));
+                    L.add(act(() -> insert(say(lastBlocked
+                        ? "The ward flares and the fangs glance off. He backs out into the cavern."
+                        : "The fangs sink in. -" + SNAKE_DMG + " HP. He staggers back out into the cavern."))));
+                    L.add(act(() -> { doorOpen[p] = false; open[p] = false; blocked[p] = 1; }));
+                    L.add(act(this::lightPhase));
+                    break;
+                default:
+                    L.add(say("A dead end. Fallen rock blocks the way, and he turns back to the cavern."));
+                    L.add(act(() -> { doorOpen[p] = false; open[p] = false; blocked[p] = 2; }));
+                    L.add(act(this::lightPhase));
+                    break;
+            }
+            insert(L);
+        }));
+    }
+
+    void finalRound() {
+        insert(
+            act(() -> { scene = Scene.FINAL; goblinVisible = true; spells = 1; maxSpells = 1; }),
+            say("The tunnel opens into the deepest chamber of the cavern."),
+            say("The Thief is waiting, and beside it lies the Curse's Seal."),
+            say("\"Give that back,\" the mage says."),
+            say("The thief doesn't move. Then it suddenly vanishes."),
+            act(() -> { goblinVisible = false; flash = 0.8; }),
+            say("Each round led him deeper into the cave."),
+            say("With every item he retrieved, another piece of his forgotten past returned."),
+            sys("One last Light Spell remains"),
+            askYesNo("Use the last Light Spell?", b -> { }),
+            act(() -> spells = 0),
+            say("He uses the last Light Spell."),
+            say("The darkness disappears, but he only sees himself..."),
+            say("Not who he is now, but someone from the past."),
+            act(() -> { scene = Scene.MEMORY; flash = 1; }),
+            sys("The Forgotten Memory"),
+            say("He remembers. He had once been a powerful mage."),
+            say("So confident, he attempted a spell far beyond his control. It went wrong."),
+            say("Someone important to him was caught in the aftermath."),
+            act(() -> { flash = 1; shake = 10; }),
+            say("He remembers reaching out. He remembers screaming. He remembers the light. Then nothing."),
+            say("The guilt was unbearable. He couldn't accept what he had done."),
+            say("So he created the Curse of Mana himself, sealing away his own magic."),
+            say("To protect himself, he also sealed the memories around the incident."),
+            say("He forgot that he had cursed himself... and began to believe someone else had."),
+            say("His journey had never been about finding a cure."),
+            say("It was about finding someone to undo a curse he had chosen to create."),
+            act(() -> inventory.add(SEAL)),
+            act(this::finalChoice)
+        );
+    }
+
+    void finalChoice() {
+        insert(
+            sys("The Final Choice"),
+            sys("TRUTH IDENTIFIED."),
+            sys("THE CURSE OF MANA WAS SELF-IMPOSED."),
+            sys("MEMORY RESTORED."),
+            askYesNo("WOULD YOU LIKE TO REMOVE THE CURSE?", remove -> insert(
+                say("He looks at the Curse's Seal. For years he wanted nothing more than to be rid of it."),
+                say("But now he understands why it existed."),
+                say("For the first time, he doesn't need the screen to tell him what to do. He chooses."),
+                sys("CHOICE ACCEPTED."),
+                say("The screen disappears. The cavern becomes silent."),
+                say("He takes the Curse's Seal in his hand."),
+                act(() -> {
+                    scene = remove ? Scene.FORGIVE : Scene.ATONE;
+                    endingName = remove ? "Forgiveness" : "Atonement";
+                    flash = 1;
+                }),
+                say(remove ? "[ENDING: Forgiveness]" : "[ENDING: Atonement]"),
+                say(remove ? "He breaks the seal. Mana floods back, warm and steady."
+                           : "He closes his fist around the seal and keeps the curse."),
+                say(remove ? "He will carry the guilt, but this time he will protect people, just as he promised."
+                           : "Not as a punishment he forgot, but as a weight he chooses to carry knowingly."),
+                say("He turns toward the exit. Before he completely leaves the cave, one last message appears:"),
+                sys("CAVERN CLEARED."),
+                sys("OBJECTIVE COMPLETE: REMEMBER."),
+                endStep()
+            ))
+        );
+    }
+
+    void setHomeMusicVolume(Point p) {
+        if (!volumeSliderRect.contains(p)) return;
+        audio.setMusicVolume((p.x - volumeSliderRect.x) / (float) volumeSliderRect.width);
+    }
+
+    // =====================================================================
+    //  Items
+    // =====================================================================
+    /** Items can be used whenever the game is asking the player to choose (and a round is running). */
+    boolean canUseItems() {
+        return scene == Scene.DOORS && roundNo > 0 && (mode == Mode.YESNO || mode == Mode.DOOR);
+    }
+
+    boolean itemReady(int i) {
+        return i < 4 && inventory.contains(ITEMS[i]) && !used.contains(ITEMS[i]);
+    }
+
+    Rectangle slotRect(int i) { return new Rectangle(PW - 20 - 5 * 50 + i * 50, 10, 44, 44); }
+
+    void useItem(int i) {
+        if (i < 0 || i > 3 || !itemReady(i)) return;
+        if (!canUseItems()) { toast("Items can only be used while choosing."); return; }
+        String name = ITEMS[i];
+        switch (i) {
+            case 0: // Mana Potion: +1 Light Spell
+                if (spells >= maxSpells) { toast("Light Spells are already full."); return; }
+                spells++; used.add(name); flash = 0.3;
+                toast("POTION: +1 LIGHT SPELL (" + spells + "/" + maxSpells + ")");
+                if (mode == Mode.DOOR && "walk".equals(doorPurpose)) {
+                    // the player was about to walk in: give them the chance to cast the refilled spell first
+                    doorCb = null; mode = Mode.NONE;
+                    insert(act(this::lightPhase));
+                    proceed();
+                }
+                break;
+            case 1: { // Map: marks and seals off one dangerous cave
+                List<Integer> cand = new ArrayList<>();
+                for (int k = 0; k < nDoors; k++) if (open[k] && types[k] != PathType.ITEM) cand.add(k);
+                if (cand.isEmpty()) { toast("The map has nothing more to rule out."); return; }
+                int k = cand.get(rng.nextInt(cand.size()));
+                open[k] = false; blocked[k] = 3; used.add(name); flash = 0.2;
+                toast("MAP: CAVE " + roman(k) + " SEALED OFF");
+                break;
+            }
+            case 2: // Grimoire: ward blocks the next snake bite
+                if (ward) { toast("A ward is already active."); return; }
+                ward = true; used.add(name); flash = 0.3;
+                toast("WARD READY: BLOCKS NEXT BITE");
+                break;
+            default: // Old Charm: +10 HP
+                if (hp >= HP_MAX) { toast("HP is already full."); return; }
+                hp = Math.min(HP_MAX, hp + 10); used.add(name); flash = 0.3;
+                toast("OLD CHARM: +10 HP");
+                break;
+        }
+    }
+
+    // =====================================================================
+    //  Input
+    // =====================================================================
+    void advance() {
+        if (audio.blocksAdvanceForNarration()) return;
+        switch (mode) {
+            case TEXT:
+                if (reveal < cur.length()) reveal = cur.length();
+                else {
+                    mode = Mode.NONE;
+                    audio.playDialogueBoop();
+                    proceed();
+                }
+                break;
+            case AUTO: autoAt = 0; break;
+            case END: case OVER: restart(); break;
+            default: break;
+        }
+    }
+
+    boolean canPause() {
+        return scene != Scene.TITLE && mode != Mode.MENU && mode != Mode.END && mode != Mode.OVER;
+    }
+
+    void setPaused(boolean pause) {
+        if (pause == paused) return;
+        if (pause) {
+            paused = true;
+            confirmingExit = false;
+            pauseStartedAt = System.currentTimeMillis();
+            audio.pauseNarration();
+        } else {
+            long pausedFor = System.currentTimeMillis() - pauseStartedAt;
+            if (autoAt > 0) autoAt += pausedFor;
+            audio.resumeNarration(pausedFor);
+            confirmingExit = false;
+            paused = false;
+        }
+    }
+
+    void clickPauseMenu(Point p) {
+        if (confirmingExit) {
+            if (pauseMenuRect.contains(p)) confirmingExit = false;
+            else if (pauseExitRect.contains(p)) System.exit(0);
+            return;
+        }
+        if (resumeRect.contains(p)) setPaused(false);
+        else if (pauseMenuRect.contains(p)) toMenu();
+        else if (pauseExitRect.contains(p)) confirmingExit = true;
+    }
+
+    Rectangle doorRect(int i) { return new Rectangle(dx(i) * S, dy() * S, dw() * S, dh() * S); }
+
+    void pick(int i) { if (mode == Mode.DOOR && i < nDoors && open[i]) answerDoor(i); }
+
+    boolean tryItemClick(Point p) {
+        if (!canUseItems()) return false;
+        for (int i = 0; i < 4; i++) if (itemReady(i) && slotRect(i).contains(p)) { useItem(i); return true; }
+        return false;
+    }
+
+    void click(Point p) {
+        if (paused) {
+            clickPauseMenu(p);
+            return;
+        }
+        if (canPause() && pauseRect.contains(p)) {
+            setPaused(true);
+            return;
+        }
+        switch (mode) {
+            case MENU: menuClick(p); break;
+            case TEXT: case AUTO: advance(); break;
+            case YESNO:
+                if (tryItemClick(p)) break;
+                if (yesRect.contains(p)) answerYesNo(true);
+                else if (noRect.contains(p)) answerYesNo(false);
+                break;
+            case DOOR:
+                if (tryItemClick(p)) break;
+                for (int i = 0; i < nDoors; i++) if (doorRect(i).contains(p)) { pick(i); break; }
+                break;
+            case END: case OVER:
+                if (againRect.contains(p)) restart();
+                else if (menuRect.contains(p)) toMenu();
+                break;
+            default: break;
+        }
+    }
+
+    boolean overClickable() {
+        if (paused) return confirmingExit
+            ? pauseMenuRect.contains(mouse) || pauseExitRect.contains(mouse)
+            : resumeRect.contains(mouse) || pauseMenuRect.contains(mouse) || pauseExitRect.contains(mouse);
+        if (canPause() && pauseRect.contains(mouse)) return true;
+        switch (mode) {
+            case MENU: return menuHit(mouse) != 0;
+            case YESNO: return yesRect.contains(mouse) || noRect.contains(mouse) || overItem();
+            case DOOR:
+                for (int i = 0; i < nDoors; i++) if (open[i] && doorRect(i).contains(mouse)) return true;
+                return overItem();
+            case END: case OVER: return againRect.contains(mouse) || menuRect.contains(mouse);
+            default: return false;
+        }
+    }
+
+    boolean overItem() {
+        if (!canUseItems()) return false;
+        for (int i = 0; i < 4; i++) if (itemReady(i) && slotRect(i).contains(mouse)) return true;
+        return false;
+    }
+
+    // =====================================================================
+    //  Construction
+    // =====================================================================
+    public GoblinDoorsGUI() {
+        setPreferredSize(new Dimension(PW, PH));
+        setFocusable(true);
+        menuBackground = GameAssets.loadImage("images/download.gif");
+        nightVillage = GameAssets.loadImage("images/night_village.gif");
+        wizardCharacter = GameAssets.loadImage("images/wizard_cs.gif");
+        dialogueBox = GameAssets.loadImage("images/dialogueBox.png");
+        heartFilled = GameAssets.loadImage("icons/heart_filled.png");
+        heartEmpty = GameAssets.loadImage("icons/heart_empty.png");
+        dialogueIndicator = tintDialogueIndicator(GameAssets.loadImage("images/dialogueIndicator.png"));
+        menuPlay = GameAssets.loadImage("images/play.png").getImage();
+        menuHelp = GameAssets.loadImage("images/help.png").getImage();
+        menuInfo = GameAssets.loadImage("images/i.png").getImage();
+        menuSettings = GameAssets.loadImage("images/settings.png").getImage();
+        bgCave = makeCaveBg(SH, 98);
+        bgTitle = makeCaveBg(H, 148);
+        sideTile = makeSideTile();
+        resetRun();
+        addMouseListener(new MouseAdapter() {
+            @Override public void mousePressed(MouseEvent e) {
+                requestFocusInWindow();
+                if (SwingUtilities.isLeftMouseButton(e) && !isWindowResizePoint(e.getLocationOnScreen())) {
+                    click(toVirtual(e.getPoint()));
+                }
+            }
+        });
+        addMouseMotionListener(new MouseMotionAdapter() {
+            @Override public void mouseMoved(MouseEvent e) { mouse = toVirtual(e.getPoint()); }
+            @Override public void mouseDragged(MouseEvent e) {
+                mouse = toVirtual(e.getPoint());
+                if (mode == Mode.MENU && panel == Panel.SETTINGS) setHomeMusicVolume(mouse);
+            }
+        });
+        addKeyListener(new KeyAdapter() {
+            @Override public void keyPressed(KeyEvent e) {
+                if (e.getKeyCode() == KeyEvent.VK_F11
+                    || (e.getKeyCode() == KeyEvent.VK_ENTER && e.isAltDown())) {
+                    toggleFullscreen();
+                    return;
+                }
+                if (paused) {
+                    if (confirmingExit) {
+                        if (e.getKeyCode() == KeyEvent.VK_ESCAPE || e.getKeyCode() == KeyEvent.VK_N) {
+                            confirmingExit = false;
+                        } else if (e.getKeyCode() == KeyEvent.VK_Y) {
+                            System.exit(0);
+                        }
+                    } else if (e.getKeyCode() == KeyEvent.VK_ESCAPE || e.getKeyCode() == KeyEvent.VK_ENTER
+                        || e.getKeyCode() == KeyEvent.VK_SPACE) setPaused(false);
+                    return;
+                }
+                switch (e.getKeyCode()) {
+                    case KeyEvent.VK_ESCAPE:
+                        if (canPause()) setPaused(true);
+                        else if (mode == Mode.MENU && panel != Panel.NONE) panel = Panel.NONE;
+                        else if (fullscreen) toggleFullscreen();
+                        break;
+                    case KeyEvent.VK_ENTER:
+                        advance(); break;
+                    case KeyEvent.VK_SPACE: advance(); break;
+                    case KeyEvent.VK_Y: if (mode == Mode.YESNO) answerYesNo(true); break;
+                    case KeyEvent.VK_N: if (mode == Mode.YESNO) answerYesNo(false); break;
+                    case KeyEvent.VK_1: case KeyEvent.VK_NUMPAD1: pick(0); break;
+                    case KeyEvent.VK_2: case KeyEvent.VK_NUMPAD2: pick(1); break;
+                    case KeyEvent.VK_3: case KeyEvent.VK_NUMPAD3: pick(2); break;
+                    case KeyEvent.VK_4: case KeyEvent.VK_NUMPAD4: pick(3); break;
+                    case KeyEvent.VK_5: case KeyEvent.VK_NUMPAD5: pick(4); break;
+                    case KeyEvent.VK_P: useItem(0); break;
+                    case KeyEvent.VK_M: useItem(1); break;
+                    case KeyEvent.VK_G: useItem(2); break;
+                    case KeyEvent.VK_C: useItem(3); break;
+                    default: break;
+                }
+            }
+        });
+        new javax.swing.Timer(33, e -> tick()).start();
+        begin();
+    }
+
+    static BufferedImage tintDialogueIndicator(ImageIcon icon) {
+        int width = icon.getIconWidth(), height = icon.getIconHeight();
+        if (width <= 0 || height <= 0) return null;
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = image.createGraphics();
+        g.drawImage(icon.getImage(), 0, 0, null);
+        g.dispose();
+        int gold = new Color(255, 241, 168).getRGB() & 0x00ffffff;
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int pixel = image.getRGB(x, y);
+                image.setRGB(x, y, (pixel & 0xff000000) | gold);
+            }
+        }
+        return image;
+    }
+
+    void tick() {
+        if (paused) {
+            Cursor want = Cursor.getPredefinedCursor(overClickable() ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR);
+            if (getCursor().getType() != want.getType()) setCursor(want);
+            repaint();
+            return;
+        }
+        frame++;
+        audio.updateMenuMusicFade();
+        long now = System.currentTimeMillis();
+        if (previousScene != scene) {
+            previousScene = scene;
+            sceneFade = 0f;
+        } else if (sceneFade < 1f) {
+            sceneFade = Math.min(1f, sceneFade + 0.035f);
+        }
+        if (mode == Mode.TEXT || mode == Mode.YESNO || mode == Mode.DOOR) reveal += 0.6;
+        if (mode == Mode.AUTO && now >= autoAt) { mode = Mode.NONE; proceed(); }
+        if (hpShown > hp) hpShown = Math.max(hp, hpShown - 0.4);
+        else if (hpShown < hp) hpShown = Math.min(hp, hpShown + 0.4);
+        flash *= 0.92; hurt *= 0.9; shake *= 0.85;
+        logs.removeIf(l -> now - l.at > 6000);
+        Cursor want = Cursor.getPredefinedCursor(overClickable() ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR);
+        if (getCursor().getType() != want.getType()) setCursor(want);
+        repaint();
+    }
+
+    // =====================================================================
+    //  Scene rendering (logical 320x240 canvas)
+    // =====================================================================
+    /** Big cavern wall: lumpy rock above the horizon line, pebbled floor below it, stalactites hanging down. */
+    BufferedImage makeCaveBg(int h, int hor) {
+        BufferedImage b = new BufferedImage(W, h, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = b.createGraphics();
+        Random r = new Random(7);
+        g.setColor(new Color(14, 12, 20));
+        g.fillRect(0, 0, W, h);
+        // rock wall: overlapping lumpy stones
+        for (int i = 0; i < 4 * hor; i++) {
+            int x = r.nextInt(W + 20) - 10, y = r.nextInt(hor + 6) - 3;
+            int rw = 8 + r.nextInt(18), rh = 6 + r.nextInt(12);
+            int v = 22 + r.nextInt(24);
+            g.setColor(new Color(v, v - 2, v + 10));
+            g.fillOval(x, y, rw, rh);
+            if (r.nextInt(3) == 0) { g.setColor(new Color(v + 14, v + 11, v + 26)); g.fillRect(x + 2, y + 1, rw / 2, 1); }
+        }
+        for (int i = 0; i < hor / 2; i++) {
+            int x = r.nextInt(W), y = r.nextInt(hor);
+            g.setColor(new Color(9, 7, 14));
+            g.drawLine(x, y, x + r.nextInt(14) - 7, y + 3 + r.nextInt(12));
+        }
+        // floor
+        for (int y = hor; y < h; y++) {
+            float t = Math.min(1f, (y - hor) / 62f);
+            int v = (int) (46 - 22 * t);
+            g.setColor(new Color(v + 4, v, v + 14));
+            g.fillRect(0, y, W, 1);
+        }
+        int pebbles = 70 * Math.max(1, h - hor) / 62;
+        for (int i = 0; i < pebbles; i++) {
+            int v = 55 + r.nextInt(30);
+            g.setColor(new Color(v, v - 4, v + 12));
+            g.fillRect(r.nextInt(W), hor + 2 + r.nextInt(Math.max(1, h - hor - 4)), 1 + r.nextInt(3), 1 + r.nextInt(2));
+        }
+        g.setColor(new Color(10, 8, 16));
+        g.fillRect(0, hor - 4, W, 4);
+        // stalactites
+        for (int i = 0; i < 16; i++) {
+            int x = r.nextInt(W), len = 6 + r.nextInt(18);
+            for (int k = 0; k < len; k++) {
+                int w = Math.max(1, (len - k) / 3 + 1);
+                g.setColor(new Color(20 + k, 18 + k, 30 + k));
+                g.fillRect(x - w / 2, k, w, 1);
+            }
+        }
+        g.dispose();
+        return b;
+    }
+
+    BufferedImage makeSideTile() {
+        BufferedImage b = new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = b.createGraphics();
+        Random r = new Random(11);
+        g.setColor(new Color(16, 14, 24)); g.fillRect(0, 0, 64, 64);
+        for (int i = 0; i < 70; i++) {
+            int v = 22 + r.nextInt(22);
+            g.setColor(new Color(v, v - 2, v + 10));
+            g.fillOval(r.nextInt(64), r.nextInt(64), 8 + r.nextInt(14), 6 + r.nextInt(10));
+        }
+        g.dispose();
+        return b;
+    }
+
+    void glow(Graphics2D g, float cx, float cy, float rad, Color c, int a) {
+        Paint old = g.getPaint();
+        g.setPaint(new RadialGradientPaint(new Point2D.Float(cx, cy), rad, new float[]{0f, 1f},
+            new Color[]{new Color(c.getRed(), c.getGreen(), c.getBlue(), Math.min(255, Math.max(0, a))),
+                        new Color(c.getRed(), c.getGreen(), c.getBlue(), 0)}));
+        g.fill(new Rectangle2D.Float(cx - rad, cy - rad, 2 * rad, 2 * rad));
+        g.setPaint(old);
+    }
+
+    void vignette(Graphics2D g, float cx, float cy, float rad, int maxA, int height) {
+        Paint old = g.getPaint();
+        g.setPaint(new RadialGradientPaint(new Point2D.Float(cx, cy), rad, new float[]{0f, 0.5f, 1f},
+            new Color[]{new Color(0, 0, 0, 0), new Color(0, 0, 0, 60), new Color(0, 0, 0, maxA)}));
+        g.fillRect(0, 0, W, height);
+        g.setPaint(old);
+    }
+
+    /** Glowing cavern crystals - the cavern's own light (no torches, this is a cave, not a dungeon). */
+    void drawCrystal(Graphics2D g, int x, int y, Color c) {
+        int pulse = 60 + (int) (Math.sin(frame * 0.07 + x) * 20);
+        glow(g, x, y - 8, 24, c, pulse);
+        g.setColor(c.darker().darker());
+        g.fillPolygon(new int[]{x - 7, x - 3, x}, new int[]{y, y - 12, y}, 3);
+        g.setColor(c.darker());
+        g.fillPolygon(new int[]{x + 1, x + 4, x + 8}, new int[]{y, y - 9, y}, 3);
+        g.setColor(c);
+        g.fillPolygon(new int[]{x - 3, x + 1, x + 4}, new int[]{y, y - 20, y}, 3);
+        g.setColor(new Color(255, 255, 255, 170));
+        g.fillRect(x, y - 15, 1, 5);
+    }
+
+    void drawMage(Graphics2D g, int x, int y, int sc) {
+        if (wizardCharacter == null || wizardCharacter.getIconWidth() <= 0 || wizardCharacter.getIconHeight() <= 0) {
+            return;
+        }
+        int pixelHeight = 20 * sc;
+        int pixelWidth = 16 * sc;
+        int targetHeight = Math.max(1, Math.round(pixelHeight * 1.5f));
+        int targetWidth = Math.max(1, Math.round(targetHeight
+            * (float) wizardCharacter.getIconWidth() / wizardCharacter.getIconHeight()));
+        g.drawImage(wizardCharacter.getImage(), x - (targetWidth - pixelWidth) / 2,
+            y + pixelHeight - targetHeight, targetWidth, targetHeight, null);
+    }
+
+    // ---------- Cave entrances ----------
+    void rockSurround(Graphics2D g, int x, int y, int w, int h, long seed) {
+        g.setColor(new Color(46, 42, 60));
+        g.fill(caveShape(x, y, w, h, 5, seed));
+        Random r = new Random(seed * 31 + 7);
+        for (Point2D p : caveOutline(x, y, w, h, 5, seed)) {
+            int rad = 3 + r.nextInt(5), v = 62 + r.nextInt(38);
+            g.setColor(new Color(v, v - 3, v + 12));
+            g.fillOval((int) p.getX() - rad, (int) p.getY() - rad, rad * 2, rad * 2);
+            g.setColor(new Color(v + 22, v + 18, v + 34));
+            g.fillRect((int) p.getX() - rad + 1, (int) p.getY() - rad + 1, Math.max(1, rad - 1), 1);
+        }
+    }
+
+    void drawFangs(Graphics2D g, int x, int y, int w) {
+        double cx = x + w / 2.0, cy = y + w / 2.0, r = w / 2.0;
+        int n = Math.max(3, w / 8);
+        for (int k = 0; k < n; k++) {
+            double tx = x + 3 + (w - 6) * (k + 0.5) / n;
+            double dxx = tx - cx;
+            double top = cy - Math.sqrt(Math.max(0, r * r - dxx * dxx));
+            int len = 4 + (k * 5) % 6;
+            g.setColor(new Color(34, 30, 44));
+            g.fillPolygon(new int[]{(int) tx - 2, (int) tx + 2, (int) tx}, new int[]{(int) top - 1, (int) top - 1, (int) top + len}, 3);
+        }
+    }
+
+    /** An unlit cave mouth: pure darkness. */
+    void drawDark(Graphics2D g, int x, int y, int w, int h) {
+        g.setColor(new Color(5, 4, 9)); g.fillRect(x, y, w, h);
+        g.setColor(new Color(14, 12, 22));
+        g.fillRect(x, y + h - 4, w, 4);
+    }
+
+    /** A lit tunnel running away from the viewer (perspective walls, ceiling and floor). */
+    void drawTunnel(Graphics2D g, int x, int y, int w, int h) {
+        int bx0 = x + (int) (w * 0.22), bx1 = x + (int) (w * 0.78), by0 = y + (int) (h * 0.30), by1 = y + (int) (h * 0.62);
+        g.setColor(new Color(20, 16, 28)); g.fillRect(x, y, w, h);
+        g.setColor(new Color(12, 10, 18)); g.fillRect(bx0, by0, bx1 - bx0, by1 - by0);
+        g.setColor(new Color(30, 25, 40)); g.fillPolygon(new int[]{x, x + w, bx1, bx0}, new int[]{y, y, by0, by0}, 4);
+        g.setColor(new Color(50, 42, 62)); g.fillPolygon(new int[]{x, bx0, bx0, x}, new int[]{y, by0, by1, y + h}, 4);
+        g.setColor(new Color(44, 37, 56)); g.fillPolygon(new int[]{x + w, bx1, bx1, x + w}, new int[]{y, by0, by1, y + h}, 4);
+        g.setColor(new Color(74, 62, 84)); g.fillPolygon(new int[]{x, x + w, bx1, bx0}, new int[]{y + h, y + h, by1, by1}, 4);
+        glow(g, x + w / 2f, y + h * 0.78f, w, new Color(255, 225, 150), 90);
+    }
+
+    /** What the light reveals inside entrance i. */
+    void drawInterior(Graphics2D g, int i, int x, int y, int w, int h) {
+        drawTunnel(g, x, y, w, h);
+        int cx = x + w / 2;
+        switch (types[i]) {
+            case ITEM: {
+                int bob = (int) (Math.sin(frame * 0.15) * 2);
+                glow(g, cx, y + h - 22, w * 0.9f, new Color(255, 220, 90), 210);
+                g.setColor(PAL.get('N')); g.fillRect(cx - 9, y + h - 12, 18, 6);
+                g.setColor(PAL.get('n')); g.fillRect(cx - 9, y + h - 14, 18, 3);
+                int ri = Math.max(0, Math.min(roundNo, 5) - 1);
+                sprite(g, ICONS[ri], cx - 8, y + h - 31 + bob, 2, null, null, false);
+                for (int k = 0; k < 4; k++)
+                    if ((frame / 5 + k) % 3 != 0) {
+                        g.setColor(Color.WHITE);
+                        g.fillRect(x + 6 + k * (w - 12) / 4, y + h / 2 + ((k * 13) % 20), 2, 2);
+                    }
+                break;
+            }
+            case SNAKE:
+                glow(g, cx, y + h - 20, w * 0.8f, new Color(120, 220, 80), 80);
+                sprite(g, SNAKE, cx - 14, y + h - 30 + (frame / 6 % 2), 2, null, null, false);
+                g.setColor(new Color(255, 240, 90, 200));
+                if ((frame / 14) % 5 != 0) { g.fillRect(cx - 7, y + h - 28 + (frame / 6 % 2), 2, 2); g.fillRect(cx + 3, y + h - 28 + (frame / 6 % 2), 2, 2); }
+                break;
+            default: {
+                // collapsed tunnel: a heap of irregular boulders
+                Random br = new Random(i * 13L + 5);
+                g.setColor(new Color(40, 36, 52));
+                g.fillRect(x, y + (int) (h * 0.30), w, h);
+                for (int k = 0; k < 26; k++) {
+                    int bw = 6 + br.nextInt(9), bh = 5 + br.nextInt(7);
+                    int bx = x - 2 + br.nextInt(w + 4 - bw / 2);
+                    int by = y + (int) (h * 0.34) + br.nextInt((int) (h * 0.66) - bh);
+                    int v = 62 + br.nextInt(40);
+                    g.setColor(new Color(v, v - 3, v + 12)); g.fillOval(bx, by, bw, bh);
+                    g.setColor(new Color(v + 22, v + 18, v + 32)); g.fillRect(bx + 2, by + 1, Math.max(1, bw / 3), 1);
+                }
+                break;
+            }
+        }
+    }
+
+    void drawLightOrb(Graphics2D g, int cx, int cy) {
+        int bob = (int) (Math.sin(frame * 0.2) * 2);
+        glow(g, cx, cy + bob, 20, new Color(255, 245, 190), 200);
+        g.setColor(new Color(255, 252, 215)); g.fillOval(cx - 3, cy + bob - 3, 6, 6);
+    }
+
+    void drawMouth(Graphics2D g, int x, int y, int w, int h, long seed, Consumer<Graphics2D> inner) {
+        rockSurround(g, x, y, w, h, seed);
+        Shape old = g.getClip();
+        g.clip(caveShape(x, y, w, h, 0, seed));
+        inner.accept(g);
+        drawFangs(g, x, y, w);
+        g.setClip(old);
+    }
+
+    void drawEntrance(Graphics2D g, int i, boolean hovered) {
+        int x = dx(i), y = dy(), w = dw(), h = dh();
+        long seed = 31 + i * 17 + nDoors;
+        boolean lit = peek[i] || doorOpen[i];
+        drawMouth(g, x, y, w, h, seed, gg -> {
+            if (lit) drawInterior(gg, i, x, y, w, h); else drawDark(gg, x, y, w, h);
+        });
+        if (peek[i]) {
+            glow(g, x + w / 2f, y + h * 0.55f, w * 1.1f, new Color(255, 230, 150), 70);
+            drawLightOrb(g, x + w / 2, y + h / 2 - 6);
+        }
+        if (blocked[i] == 1) {                 // snake cave: bitten, now off limits
+            g.setColor(new Color(160, 30, 30, 120)); g.fill(caveShape(x, y, w, h, 0, seed));
+            g.setColor(new Color(235, 225, 200)); g.setStroke(new BasicStroke(3));
+            g.drawLine(x + w / 4, y + h / 2, x + 3 * w / 4, y + h - 8);
+            g.drawLine(x + 3 * w / 4, y + h / 2, x + w / 4, y + h - 8);
+            g.setStroke(new BasicStroke(1));
+        } else if (blocked[i] == 2) {          // dead end: rubble pile
+            for (int k = 0; k < 14; k++) {
+                int v = 80 + (k * 17) % 50;
+                g.setColor(new Color(v, v - 2, v + 12));
+                int rw = 6 + (k * 3) % 5;
+                g.fillOval(x + 1 + (k * 5) % Math.max(1, w - 9), y + h - 9 - (k * 7) % 18, rw, 5 + k % 3);
+            }
+        } else if (blocked[i] == 3) {          // sealed off by the map
+            g.setColor(new Color(0, 0, 0, 150)); g.fill(caveShape(x, y, w, h, 0, seed));
+            sprite(g, ICONS[1], x + w / 2 - 8, y + h / 2 - 8, 2, null, null, false);
+            g.setColor(new Color(230, 60, 60)); g.setStroke(new BasicStroke(2));
+            g.drawLine(x + w / 2 - 9, y + h / 2 - 9, x + w / 2 + 9, y + h / 2 + 9);
+            g.drawLine(x + w / 2 + 9, y + h / 2 - 9, x + w / 2 - 9, y + h / 2 + 9);
+            g.setStroke(new BasicStroke(1));
+        }
+        if (hovered) {
+            g.setColor(new Color(255, 241, 168));
+            g.setStroke(new BasicStroke(2));
+            g.draw(caveShape(x, y, w, h, 0, seed));
+            g.setStroke(new BasicStroke(1));
+        }
+    }
+
+    void drawEntrances(Graphics2D g) {
+        for (int i = 0; i < nDoors; i++) {
+            boolean hov = mode == Mode.DOOR && open[i] && doorRect(i).contains(mouse);
+            drawEntrance(g, i, hov);
+        }
+    }
+
+    // ---------- Title scene (shown behind the main menu) ----------
+    void drawTitleScene(Graphics2D g) {
+        g.setClip(0, 0, W, H);
+        g.drawImage(bgTitle, 0, 0, null);
+        drawCrystal(g, 108, 200, new Color(90, 170, 255));
+        drawCrystal(g, 216, 208, new Color(170, 110, 255));
+        drawCrystal(g, 160, 230, new Color(90, 220, 200));
+
+        // left: the mage lights up a cave entrance with his Light Spell
+        final int lx = 10, ly = 70, lw = 44, lh = 78;
+        drawMouth(g, lx, ly, lw, lh, 5, gg -> drawTunnel(gg, lx, ly, lw, lh));
+        glow(g, lx + lw / 2f, ly + lh * 0.6f, 50, new Color(255, 230, 150), 80);
+        drawMage(g, 14, 148, 2);
+        drawLightOrb(g, 52, 160);
+
+        // right: a goblin peeks out of a dark cave entrance
+        final int rx = 266, ry = 70, rw = 44, rh = 78;
+        final int bob = frame / 12 % 2;
+        drawMouth(g, rx, ry, rw, rh, 9, gg -> {
+            drawDark(gg, rx, ry, rw, rh);
+            glow(gg, rx + 14, ry + rh - 26, 22, new Color(255, 230, 90), 60);
+            sprite(gg, GOBLIN, rx - 8, ry + rh - 40 + bob, 3, null, null, true);
+        });
+        g.setColor(PAL.get('g'));                    // fingers gripping the cave edge
+        g.fillRect(rx - 4, ry + rh - 24, 5, 3); g.fillRect(rx - 4, ry + rh - 20, 5, 3); g.fillRect(rx - 4, ry + rh - 16, 5, 3);
+
+        vignette(g, 160, 130, 200, 150, H);
+    }
+
+    // ---------- Gameplay scenes ----------
+    void drawScene(Graphics2D g) {
+        g.setClip(null);
+        g.setColor(new Color(8, 6, 12)); g.fillRect(0, 0, W, H);
+        g.setClip(0, 0, W, SH);
+        switch (scene) {
+            case TITLE: {
+                drawTitleScene(g);
+                break;
+            }
+            case CAMP: {
+                if (openingVillage && nightVillage != null) {
+                    g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+                    g.drawImage(nightVillage.getImage(), 0, 0, W, SH, null);
+                    vignette(g, 160, 125, 175, 120, SH);
+                    break;
+                }
+                g.drawImage(bgCave, 0, 0, null);
+                glow(g, 200, 135, 80, new Color(255, 150, 50), 90);
+                drawFire(g, 200, 138);
+                if (sleeping) {
+                    AffineTransform o = g.getTransform();
+                    g.translate(110, 152); g.rotate(-Math.PI / 2);
+                    drawMage(g, 0, 0, 2);
+                    g.setTransform(o);
+                    g.setFont(pixelFont(Font.BOLD, 9));
+                    g.setColor(new Color(200, 220, 255));
+                    int zz = (frame / 8) % 3;
+                    g.drawString("z", 150, 112 - zz * 3);
+                    g.drawString("Z", 158, 104 - zz * 3);
+                } else {
+                    drawMage(g, 112, 112, 2);
+                }
+                for (int i = 0; i < inventory.size(); i++)
+                    sprite(g, ICONS[iconFor(inventory.get(i))], 150 + i * 10, 150, 1, null, null, false);
+                vignette(g, 200, 125, 190, 220, SH);
+                break;
+            }
+            case TUNNEL: {
+                g.drawImage(bgCave, 0, 0, null);
+                g.setColor(new Color(20, 16, 24));
+                for (int k = 0; k < 10; k++) g.fillRect(104 + k * 13, 134 + (k % 2) * 6, 3, 2);
+                drawMage(g, 60, 112, 2);
+                if (lumen) {
+                    glow(g, 98, 120, 70, new Color(255, 240, 160), 170);
+                    g.setColor(new Color(255, 250, 200)); g.fillOval(95, 117, 6, 6);
+                }
+                vignette(g, 98, 120, 140, 240, SH);
+                break;
+            }
+            case DOORS: {
+                g.drawImage(bgCave, 0, 0, null);
+                drawCrystal(g, 9, 132, new Color(90, 170, 255));
+                drawCrystal(g, 311, 134, new Color(170, 110, 255));
+                drawEntrances(g);
+                drawMage(g, 144, 112, 2);
+                if (lumen) {
+                    glow(g, 182, 126, 40, new Color(255, 240, 160), 110);
+                    g.setColor(new Color(255, 250, 200)); g.fillOval(180, 124, 5, 5);
+                }
+                vignette(g, 160, 125, 175, 215, SH);
+                if (itemShow >= 0) {
+                    int bob = (int) (Math.sin(frame * 0.12) * 3);
+                    g.setColor(new Color(0, 0, 0, 120)); g.fillRect(0, 0, W, SH);
+                    glow(g, 160, 72, 70, new Color(255, 220, 100), 190);
+                    sprite(g, ICONS[itemShow], 160 - 24, 48 + bob, 6, null, null, false);
+                }
+                break;
+            }
+            case FINAL: {
+                g.drawImage(bgCave, 0, 0, null);
+                drawCrystal(g, 24, 132, new Color(90, 170, 255));
+                drawCrystal(g, 296, 134, new Color(170, 110, 255));
+                glow(g, 232, 140, 40, new Color(255, 40, 40), 90 + (int) (Math.sin(frame * 0.2) * 30));
+                sprite(g, ICONS[4], 224, 132, 2, null, null, false);
+                if (goblinVisible) sprite(g, GOBLIN, 168, 112, 3, null, null, false);
+                drawMage(g, 60, 112, 2);
+                vignette(g, 160, 125, 190, 205, SH);
+                break;
+            }
+            case MEMORY: {
+                g.setColor(new Color(14, 10, 30)); g.fillRect(0, 0, W, SH);
+                g.setColor(new Color(40, 30, 70, 120));
+                for (int k = 0; k < 24; k++) {
+                    double a = k * Math.PI / 12 + frame * 0.01;
+                    g.drawLine(160, 80, 160 + (int) (Math.cos(a) * 200), 80 + (int) (Math.sin(a) * 200));
+                }
+                glow(g, 160, 80, 100, new Color(255, 230, 150), 150 + (int) (Math.sin(frame * 0.1) * 30));
+                drawMage(g, 128, 62, 4);
+                drawMage(g, 232, 106, 2);
+                glow(g, 248, 120, 24, new Color(180, 160, 255), 60);
+                g.setColor(new Color(60, 50, 90)); g.fillRect(0, 148, W, 12);
+                break;
+            }
+            case FORGIVE: drawEnding(g, true); break;
+            case ATONE:   drawEnding(g, false); break;
+        }
+    }
+
+    void drawFire(Graphics2D g, int x, int y) {
+        int f = frame / 3;
+        int h1 = 12 + (f % 3) * 2, h2 = 8 + ((f + 1) % 3) * 2;
+        g.setColor(PAL.get('N')); g.fillRect(x - 10, y + 2, 20, 4);
+        g.setColor(PAL.get('n')); g.fillRect(x - 8, y, 16, 3);
+        g.setColor(new Color(220, 70, 30));  g.fillOval(x - 7, y - h1 + 3, 14, h1);
+        g.setColor(new Color(255, 160, 40)); g.fillOval(x - 5, y - h2 + 3, 10, h2);
+        g.setColor(new Color(255, 241, 168)); g.fillOval(x - 2, y - 1, 5, 5);
+    }
+
+    void drawEnding(Graphics2D g, boolean forgive) {
+        Color top = forgive ? new Color(255, 215, 130) : new Color(55, 75, 130);
+        Color bot = forgive ? new Color(130, 70, 110) : new Color(20, 25, 50);
+        g.setPaint(new GradientPaint(0, 0, top, 0, 110, bot));
+        g.fillRect(0, 0, W, 112);
+        g.setPaint(null);
+        if (!forgive) {
+            g.setColor(new Color(225, 235, 255)); g.fillOval(250, 14, 22, 22);
+            g.setColor(new Color(55, 75, 130));   g.fillOval(257, 12, 20, 20);
+            Random r = new Random(3);
+            g.setColor(Color.WHITE);
+            for (int i = 0; i < 25; i++) if ((frame / 8 + i) % 4 != 0) g.fillRect(r.nextInt(W), r.nextInt(70), 1, 1);
+        } else {
+            glow(g, 160, 100, 120, new Color(255, 240, 160), 120);
+        }
+        g.setColor(forgive ? new Color(40, 55, 45) : new Color(14, 20, 34));
+        g.fillRect(0, 112, W, SH - 112);
+        g.setColor(forgive ? new Color(20, 35, 30) : new Color(8, 12, 24));
+        for (int i = 0; i < 9; i++) {
+            int bx = i * 40 + 6 + (i % 2) * 10, base = 114, h = 36 + (i * 13) % 20;
+            g.fillPolygon(new int[]{bx - 12, bx, bx + 12}, new int[]{base, base - h, base}, 3);
+        }
+        drawMage(g, 144, 76, 2);
+        if (forgive) {
+            for (int k = 0; k < 22; k++) {
+                int px = 100 + (k * 37) % 120;
+                int py = 120 - ((frame * 2 + k * 17) % 100);
+                g.setColor(new Color(255, 241, 168, 200));
+                g.fillRect(px, py, 2, 2);
+            }
+        } else {
+            glow(g, 190, 100, 20, new Color(255, 60, 60), 90);
+            sprite(g, ICONS[4], 184, 94, 1, null, null, false);
+        }
+    }
+
+    // =====================================================================
+    //  Painting (full-res UI on top of the scaled scene)
+    // =====================================================================
+    /** Black bars that fill the window around the centered 4:3 game area. */
+    void paintSides(Graphics2D g) {
+        g.setPaint(null);
+        g.setColor(Color.BLACK);
+        g.fillRect(0, 0, getWidth(), getHeight());
+    }
+
+    @Override protected void paintComponent(Graphics g0) {
+        super.paintComponent(g0);
+        Graphics2D g = (Graphics2D) g0.create();
+        computeScale();
+        if (mode == Mode.MENU) { paintMenu(g); g.dispose(); return; }
+
+        Graphics2D gb = buf.createGraphics();
+        drawScene(gb);
+        gb.setClip(0, 0, W, SH);
+        if (hurt > 0.03) { gb.setColor(new Color(200, 0, 0, (int) (110 * Math.min(1, hurt)))); gb.fillRect(0, 0, W, SH); }
+        if (flash > 0.03) { gb.setColor(new Color(255, 255, 255, (int) (255 * Math.min(1, flash)))); gb.fillRect(0, 0, W, SH); }
+        gb.dispose();
+
+        g.setColor(Color.BLACK); g.fillRect(0, 0, getWidth(), getHeight());
+        paintSides(g);
+        g.translate(offX, offY); g.scale(scale, scale);
+        int sx = (int) ((Math.random() - 0.5) * 2 * shake), sy = (int) ((Math.random() - 0.5) * 2 * shake);
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+        g.drawImage(buf, sx, sy, PW, PH, null);
+        if (sceneFade < 1f) {
+            g.setColor(new Color(0, 0, 0, Math.round(255 * (1f - sceneFade))));
+            g.fillRect(0, 0, PW, PH);
+        }
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
+        drawDoorNumerals(g); drawHud(g); drawLog(g); drawDialogue(g);
+        if (mode == Mode.END) drawEndScreen(g);
+        if (mode == Mode.OVER) drawOverScreen(g);
+        if (canPause()) drawPauseButton(g);
+        if (paused) drawPauseMenu(g);
+        g.dispose();
+    }
+
+    void drawPauseButton(Graphics2D g) {
+        boolean hover = pauseRect.contains(mouse);
+        g.setColor(hover ? new Color(255, 241, 168) : new Color(40, 34, 80));
+        g.fillRect(pauseRect.x, pauseRect.y, pauseRect.width, pauseRect.height);
+        g.setColor(new Color(255, 241, 168));
+        g.setStroke(new BasicStroke(3));
+        g.drawRect(pauseRect.x, pauseRect.y, pauseRect.width, pauseRect.height);
+        g.setStroke(new BasicStroke(1));
+        g.setColor(hover ? new Color(40, 30, 10) : Color.WHITE);
+        g.fillRect(pauseRect.x + 17, pauseRect.y + 14, 6, 26);
+        g.fillRect(pauseRect.x + 31, pauseRect.y + 14, 6, 26);
+    }
+
+    void drawPauseMenu(Graphics2D g) {
+        g.setColor(new Color(0, 0, 0, 190));
+        g.fillRect(0, 0, PW, PH);
+        g.setColor(new Color(16, 14, 34));
+        g.fillRect(290, 190, 380, 390);
+        g.setColor(new Color(255, 241, 168));
+        g.setStroke(new BasicStroke(3));
+        g.drawRect(290, 190, 380, 390);
+        g.setStroke(new BasicStroke(1));
+        g.setFont(pixelFont(Font.BOLD, 42));
+        g.setColor(new Color(255, 241, 168));
+        if (confirmingExit) {
+            centerText(g, "Exit to Desktop?", PW / 2, 260);
+            g.setFont(pixelFont(Font.BOLD, 20));
+            g.setColor(new Color(235, 230, 215));
+            centerText(g, "Are you sure you want to quit?", PW / 2, 320);
+            menuButton(g, pauseMenuRect, "Cancel", true, pauseMenuRect.contains(mouse));
+            menuButton(g, pauseExitRect, "Exit", true, pauseExitRect.contains(mouse));
+        } else {
+            centerText(g, "Paused", PW / 2, 260);
+            menuButton(g, resumeRect, "Resume", true, resumeRect.contains(mouse));
+            menuButton(g, pauseMenuRect, "Main Menu", true, pauseMenuRect.contains(mouse));
+            menuButton(g, pauseExitRect, "Exit to Desktop", true, pauseExitRect.contains(mouse));
+        }
+    }
+
+    void centerText(Graphics2D g, String s, int cx, int y) {
+        g.drawString(s, cx - g.getFontMetrics().stringWidth(s) / 2, y);
+    }
+
+    void shadowText(Graphics2D g, String s, int x, int y, Color c) {
+        g.setColor(new Color(0, 0, 0, 200)); g.drawString(s, x + 2, y + 2);
+        g.setColor(c); g.drawString(s, x, y);
+    }
+
+    void drawHud(Graphics2D g) {
+        // ----- Hearts (10 HP each) -----
+        int hpX = PW - 20 - 5 * 50 - 15;
+        int heartSize = 36;
+        int heartGap = 8;
+        int heartsWidth = 3 * heartSize + 2 * heartGap;
+        int heartsX = hpX + (274 - heartsWidth) / 2;
+        for (int i = 0; i < 3; i++) {
+            ImageIcon heart = hp >= (i + 1) * 10 ? heartFilled : heartEmpty;
+            g.drawImage(heart.getImage(), heartsX + i * (heartSize + heartGap), 65,
+                heartSize, heartSize, null);
+        }
+        if (ward) {                                       // Grimoire ward indicator
+            int sx = 22, sy = 100;
+            g.setColor(new Color(0, 0, 0, 150)); g.fillRoundRect(sx - 6, sy - 4, 100, 34, 10, 10);
+            g.setColor(new Color(120, 220, 255));
+            g.fillPolygon(new int[]{sx, sx + 20, sx + 20, sx + 10, sx}, new int[]{sy, sy, sy + 14, sy + 24, sy + 14}, 5);
+            g.setColor(Color.WHITE); g.drawLine(sx + 10, sy + 4, sx + 10, sy + 18);
+            shadowText(g, "WARD", sx + 28, sy + 18, new Color(160, 230, 255));
+        }
+
+        // ----- Round + Light Spells -----
+        if ((scene == Scene.DOORS && roundNo > 0) || scene == Scene.FINAL) {
+            String rl = scene == Scene.FINAL ? "FINAL ROUND" : "ROUND " + roundNo;
+            int spellY = 432;
+            int statusY = 450;
+            shadowText(g, rl, 20, statusY, new Color(255, 241, 168));
+            for (int i = 0; i < maxSpells; i++) {
+                int ox = 300 + i * 26;
+                if (i < spells) { g.setColor(new Color(255, 241, 168)); g.fillOval(ox, spellY, 18, 18); g.setColor(Color.WHITE); g.fillOval(ox + 4, spellY + 4, 5, 5); }
+                else { g.setColor(new Color(255, 241, 168, 120)); g.drawOval(ox, spellY, 18, 18); }
+            }
+            shadowText(g, "LIGHT SPELLS", 304 + maxSpells * 26, statusY, new Color(255, 241, 168));
+        }
+
+        // ----- Items (clickable) -----
+        int hovered = -1;
+        for (int i = 0; i < 5; i++) {
+            Rectangle r = slotRect(i);
+            String name = i < 4 ? ITEMS[i] : SEAL;
+            boolean have = inventory.contains(name), spent = used.contains(name);
+            boolean ready = itemReady(i) && canUseItems();
+            boolean hov = r.contains(mouse);
+            if (hov) hovered = i;
+            g.setColor(new Color(0, 0, 0, 160)); g.fillRect(r.x, r.y, r.width, r.height);
+            if (ready) {
+                int a = 150 + (int) (Math.sin(frame * 0.2) * 90);
+                g.setColor(new Color(255, 241, 168, Math.max(0, Math.min(255, a)))); g.setStroke(new BasicStroke(3));
+            } else g.setColor(new Color(255, 241, 168, 160));
+            g.drawRect(r.x, r.y, r.width, r.height);
+            g.setStroke(new BasicStroke(1));
+            Color mono = !have ? new Color(50, 50, 70) : spent ? new Color(80, 80, 100) : null;
+            sprite(g, ICONS[i], r.x + 6, 16, 4, mono, null, false);
+            if (spent) { g.setColor(new Color(200, 60, 60, 200)); g.drawLine(r.x + 6, r.y + 6, r.x + 38, r.y + 38); }
+            if (i < 4 && have && !spent) {
+                g.setFont(pixelFont(Font.BOLD, 13));
+                shadowText(g, String.valueOf(ITEM_KEY[i]), r.x + r.width - 13, r.y + r.height - 3, ready ? new Color(255, 241, 168) : new Color(150, 150, 170));
+            }
+        }
+        if (hovered >= 0) drawItemTooltip(g, hovered);
+    }
+
+    void drawItemTooltip(Graphics2D g, int i) {
+        String name = i < 4 ? ITEMS[i] : SEAL;
+        String desc = i < 4 ? ITEM_DESC[i] : "The key to the mage's forgotten past.";
+        String status;
+        if (i == 4) status = inventory.contains(SEAL) ? "RECOVERED" : "Hidden in the deepest cave (round 5).";
+        else if (!inventory.contains(name)) status = "Not recovered yet (found in round " + (i + 1) + ").";
+        else if (used.contains(name)) status = "USED";
+        else if (canUseItems()) status = "Click or press [" + ITEM_KEY[i] + "] to use it.";
+        else status = "Use it when choosing a cave [" + ITEM_KEY[i] + "].";
+        g.setFont(fSys);
+        FontMetrics fm = g.getFontMetrics();
+        int bw = Math.max(fm.stringWidth(name), Math.max(fm.stringWidth(desc), fm.stringWidth(status))) + 28;
+        int bx = PW - 20 - bw, by = 62, bh = 92;
+        g.setColor(new Color(10, 8, 24, 240)); g.fillRect(bx, by, bw, bh);
+        g.setColor(new Color(255, 241, 168)); g.drawRect(bx, by, bw, bh);
+        g.setColor(new Color(255, 241, 168)); g.drawString(name, bx + 14, by + 26);
+        g.setColor(new Color(235, 230, 215)); g.drawString(desc, bx + 14, by + 52);
+        g.setColor(new Color(150, 230, 255)); g.drawString(status, bx + 14, by + 78);
+    }
+
+    void drawLog(Graphics2D g) {
+        g.setFont(pixelFont(Font.BOLD, 15));
+        FontMetrics fm = g.getFontMetrics();
+        long now = System.currentTimeMillis();
+        int y = 29;
+        int n = logs.size();
+        for (int i = Math.max(0, n - 2); i < n; i++) {
+            Log l = logs.get(i);
+            long age = now - l.at;
+            float a = age < 4000 ? 1f : Math.max(0f, 1f - (age - 4000) / 2000f);
+            String t = "[" + l.t + "]";
+            int w = fm.stringWidth(t);
+            int cx = 490;
+            g.setColor(new Color(10, 30, 50, (int) (190 * a)));
+            g.fillRoundRect(cx - w / 2 - 8, y - 16, w + 16, 24, 10, 10);
+            g.setColor(new Color(130, 225, 255, (int) (255 * a)));
+            g.drawString(t, cx - w / 2, y);
+            y += 27;
+        }
+    }
+
+    void drawDoorNumerals(Graphics2D g) {
+        if (scene != Scene.DOORS || roundNo == 0) return;
+        g.setFont(pixelFont(Font.BOLD, nDoors == 3 ? 22 : 19));
+        for (int i = 0; i < nDoors; i++) {
+            Color c = open[i] ? new Color(255, 241, 168) : new Color(110, 110, 125);
+            centerText2(g, roman(i), (dx(i) + dw() / 2) * S, (dy() - 6) * S, c);
+        }
+    }
+
+    void centerText2(Graphics2D g, String s, int cx, int y, Color c) {
+        int x = cx - g.getFontMetrics().stringWidth(s) / 2;
+        shadowText(g, s, x, y, c);
+    }
+
+    static List<String> wrap(String s, FontMetrics fm, int maxW) {
+        List<String> out = new ArrayList<>();
+        StringBuilder line = new StringBuilder();
+        for (String w : s.split(" ")) {
+            String t = line.length() == 0 ? w : line + " " + w;
+            if (fm.stringWidth(t) > maxW && line.length() > 0) { out.add(line.toString()); line = new StringBuilder(w); }
+            else line = new StringBuilder(t);
+        }
+        if (line.length() > 0) out.add(line.toString());
+        return out;
+    }
+
+    int drawWrapped(Graphics2D g, String s, int x, int y, int maxW, int lineH) {
+        for (String ln : wrap(s, g.getFontMetrics(), maxW)) { g.drawString(ln, x, y); y += lineH; }
+        return y;
+    }
+
+    void drawButton(Graphics2D g, Rectangle r, String label, String key) {
+        boolean hov = r.contains(mouse);
+        g.setColor(hov ? new Color(255, 241, 168) : new Color(70, 60, 110));
+        g.fillRect(r.x, r.y, r.width, r.height);
+        g.setColor(new Color(255, 241, 168)); g.drawRect(r.x, r.y, r.width, r.height);
+        g.setFont(fText);
+        g.setColor(hov ? new Color(40, 30, 10) : Color.WHITE);
+        centerText(g, label + (key.isEmpty() ? "" : "  (" + key + ")"), r.x + r.width / 2, r.y + r.height / 2 + 8);
+    }
+
+    void drawDialogue(Graphics2D g) {
+        int bx = 30, by = 500, bw = 900, bh = 200;
+        Color border = curSys ? new Color(90, 200, 255) : new Color(255, 241, 168);
+        if (dialogueBox != null && dialogueBox.getIconWidth() > 0 && dialogueBox.getIconHeight() > 0) {
+            g.drawImage(dialogueBox.getImage(), bx, by, bw, bh, null);
+        } else {
+            g.setColor(new Color(14, 12, 32, 238)); g.fillRoundRect(bx, by, bw, bh, 16, 16);
+            g.setColor(border); g.setStroke(new BasicStroke(3)); g.drawRoundRect(bx, by, bw, bh, 16, 16);
+            g.setStroke(new BasicStroke(1));
+            g.setColor(border.darker()); g.drawRoundRect(bx + 6, by + 6, bw - 12, bh - 12, 10, 10);
+        }
+
+        g.setFont(fText);
+        FontMetrics fm = g.getFontMetrics();
+        List<String> lines = wrap(cur, fm, bw - 70);
+        int remaining = (int) reveal, ty = by + 46;
+        g.setColor(curSys ? new Color(150, 230, 255) : new Color(245, 235, 210));
+        for (String ln : lines) {
+            if (remaining <= 0) break;
+            g.drawString(ln.length() <= remaining ? ln : ln.substring(0, remaining), bx + 32, ty);
+            remaining -= ln.length() + 1;
+            ty += 30;
+        }
+
+        if (mode == Mode.TEXT && reveal >= cur.length() && (frame / 12) % 2 == 0) {
+            int tx = bx + bw - 44, tyy = by + bh - 36;
+            if (dialogueIndicator != null) {
+                g.drawImage(dialogueIndicator, tx, tyy, 20, 20, null);
+            } else {
+                g.setColor(new Color(255, 241, 168));
+                g.fillPolygon(new int[]{tx, tx + 18, tx + 9}, new int[]{tyy + 6, tyy + 6, tyy + 18}, 3);
+            }
+        }
+        boolean anyItem = canUseItems() && (itemReady(0) || itemReady(1) || itemReady(2) || itemReady(3));
+        if (mode == Mode.YESNO) {
+            drawButton(g, yesRect, "YES", "Y");
+            drawButton(g, noRect, "NO", "N");
+            if (anyItem) {
+                g.setFont(pixelFont(Font.BOLD, 14));
+                g.setColor(new Color(255, 241, 168));
+                centerText(g, "Items: click one (top right) or press P / M / G / C", PW / 2, by + bh - 10);
+            }
+        }
+        if (mode == Mode.DOOR) {
+            g.setFont(fSys);
+            g.setColor(new Color(160, 160, 190));
+            centerText(g, "Click a cave entrance, or press 1-" + nDoors, PW / 2, by + bh - 40);
+            if (anyItem) {
+                g.setFont(pixelFont(Font.BOLD, 14));
+                g.setColor(new Color(255, 241, 168));
+                centerText(g, "Items: click one (top right) or press P / M / G / C", PW / 2, by + bh - 16);
+            }
+        }
+    }
+
+    // =====================================================================
+    //  Window scaling + fullscreen
+    // =====================================================================
+    /** The whole game lives on a 960x720 virtual canvas that is scaled (and centered) in the window.
+     *  960x720 window -> 1:1.  Fullscreen 1920x1080 -> 1.5x (1440x1080 centered, black bars on the sides). */
+    void computeScale() {
+        double sx = getWidth() / (double) PW, sy = getHeight() / (double) PH;
+        scale = Math.min(sx, sy);
+        if (scale <= 0) scale = 1;
+        offX = (getWidth() - PW * scale) / 2;
+        offY = (getHeight() - PH * scale) / 2;
+    }
+
+    Point toVirtual(Point p) {
+        computeScale();
+        return new Point((int) Math.round((p.x - offX) / scale), (int) Math.round((p.y - offY) / scale));
+    }
+
+    void toggleFullscreen() {
+        if (window == null) return;
+        GraphicsDevice gd = GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice();
+        boolean on = !fullscreen;
+        if (on) windowedBounds = window.getBounds();
+        else if (gd.getFullScreenWindow() == window) gd.setFullScreenWindow(null);
+        window.dispose();
+        window.setUndecorated(true);
+        if (on) {
+            if (gd.isFullScreenSupported()) gd.setFullScreenWindow(window);
+            else { window.setExtendedState(JFrame.MAXIMIZED_BOTH); window.setVisible(true); }
+        } else {
+            window.setExtendedState(JFrame.NORMAL);
+            if (windowedBounds != null) window.setBounds(windowedBounds);
+            window.setVisible(true);
+        }
+        fullscreen = on;
+        updateWindowChrome();
+        SwingUtilities.invokeLater(this::requestFocusInWindow);
+    }
+
+    void updateWindowChrome() {
+        if (titleBar == null || windowRoot == null || window == null) return;
+        boolean maximized = (window.getExtendedState() & JFrame.MAXIMIZED_BOTH) != 0;
+        boolean showTitleBar = !fullscreen && !maximized;
+        titleBar.setVisible(showTitleBar);
+        windowRoot.setBorder(showTitleBar
+            ? BorderFactory.createLineBorder(new Color(255, 241, 168), 2)
+            : BorderFactory.createEmptyBorder());
+        windowRoot.revalidate();
+        windowRoot.repaint();
+    }
+
+    JPanel createTitleBar() {
+        JPanel bar = new JPanel(new BorderLayout());
+        bar.setPreferredSize(new Dimension(PW, 38));
+        bar.setBackground(new Color(20, 17, 34));
+        bar.setBorder(BorderFactory.createMatteBorder(0, 0, 2, 0, new Color(255, 241, 168)));
+
+        JLabel title = new JLabel("  GOBLINS AND CAVERNS");
+        title.setForeground(new Color(255, 241, 168));
+        title.setFont(pixelFont(Font.BOLD, 16));
+        bar.add(title, BorderLayout.CENTER);
+
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        controls.setOpaque(false);
+        JButton minimize = titleBarButton("_");
+        JButton maximize = titleBarButton("[]");
+        JButton close = titleBarButton("X");
+        minimize.addActionListener(e -> window.setExtendedState(JFrame.ICONIFIED));
+        maximize.addActionListener(e -> toggleWindowMaximize());
+        close.addActionListener(e -> window.dispatchEvent(new WindowEvent(window, WindowEvent.WINDOW_CLOSING)));
+        controls.add(minimize);
+        controls.add(maximize);
+        controls.add(close);
+        bar.add(controls, BorderLayout.EAST);
+
+        addTitleBarDrag(bar);
+        addTitleBarDrag(title);
+        return bar;
+    }
+
+    JButton titleBarButton(String label) {
+        JButton button = new JButton(label);
+        button.setForeground(Color.WHITE);
+        button.setBackground(new Color(36, 31, 54));
+        button.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 15));
+        button.setFocusable(false);
+        button.setBorder(BorderFactory.createEmptyBorder(0, 12, 0, 12));
+        button.setPreferredSize(new Dimension(label.equals("X") ? 48 : 44, 36));
+        button.setOpaque(true);
+        button.addMouseListener(new MouseAdapter() {
+            @Override public void mouseEntered(MouseEvent e) {
+                button.setBackground(label.equals("X") ? new Color(170, 48, 48) : new Color(75, 62, 98));
+            }
+            @Override public void mouseExited(MouseEvent e) {
+                button.setBackground(new Color(36, 31, 54));
+            }
+        });
+        return button;
+    }
+
+    void addTitleBarDrag(Component component) {
+        Point[] dragOffset = new Point[1];
+        component.addMouseListener(new MouseAdapter() {
+            @Override public void mousePressed(MouseEvent e) {
+                if (e.getClickCount() == 2) {
+                    toggleWindowMaximize();
+                    return;
+                }
+                boolean resizingTop = e.getLocationOnScreen().y - window.getY() < 8;
+                if (!resizingTop && (window.getExtendedState() & JFrame.MAXIMIZED_BOTH) == 0) {
+                    windowedBounds = window.getBounds();
+                    dragOffset[0] = SwingUtilities.convertPoint(component, e.getPoint(), window);
+                }
+            }
+        });
+        component.addMouseMotionListener(new MouseMotionAdapter() {
+            @Override public void mouseDragged(MouseEvent e) {
+                if (dragOffset[0] == null || (window.getExtendedState() & JFrame.MAXIMIZED_BOTH) != 0) return;
+                Point screen = e.getLocationOnScreen();
+                window.setLocation(screen.x - dragOffset[0].x, screen.y - dragOffset[0].y);
+                windowedBounds = window.getBounds();
+            }
+        });
+        addWindowResizeHandlers(component);
+    }
+
+    void addWindowResizeHandlers(Component component) {
+        int[] edges = new int[1];
+        Point[] startPoint = new Point[1];
+        Rectangle[] startBounds = new Rectangle[1];
+        component.addMouseListener(new MouseAdapter() {
+            @Override public void mousePressed(MouseEvent e) {
+                edges[0] = 0;
+                startPoint[0] = null;
+                startBounds[0] = null;
+                if (fullscreen || (window.getExtendedState() & JFrame.MAXIMIZED_BOTH) != 0) return;
+                Point screen = e.getLocationOnScreen();
+                Rectangle bounds = window.getBounds();
+                int margin = 8;
+                edges[0] = 0;
+                if (screen.x - bounds.x < margin) edges[0] |= 1;
+                if (bounds.x + bounds.width - screen.x < margin) edges[0] |= 2;
+                if (screen.y - bounds.y < margin) edges[0] |= 4;
+                if (bounds.y + bounds.height - screen.y < margin) edges[0] |= 8;
+                if (edges[0] != 0) {
+                    startPoint[0] = screen;
+                    startBounds[0] = bounds;
+                }
+            }
+
+            @Override public void mouseReleased(MouseEvent e) {
+                edges[0] = 0;
+                startPoint[0] = null;
+                startBounds[0] = null;
+            }
+        });
+        component.addMouseMotionListener(new MouseMotionAdapter() {
+            @Override public void mouseMoved(MouseEvent e) {
+                if (fullscreen || (window.getExtendedState() & JFrame.MAXIMIZED_BOTH) != 0) return;
+                Point screen = e.getLocationOnScreen();
+                Rectangle bounds = window.getBounds();
+                int margin = 8, cursor = Cursor.DEFAULT_CURSOR;
+                boolean left = screen.x - bounds.x < margin;
+                boolean right = bounds.x + bounds.width - screen.x < margin;
+                boolean top = screen.y - bounds.y < margin;
+                boolean bottom = bounds.y + bounds.height - screen.y < margin;
+                if (left && top) cursor = Cursor.NW_RESIZE_CURSOR;
+                else if (right && top) cursor = Cursor.NE_RESIZE_CURSOR;
+                else if (left && bottom) cursor = Cursor.SW_RESIZE_CURSOR;
+                else if (right && bottom) cursor = Cursor.SE_RESIZE_CURSOR;
+                else if (left) cursor = Cursor.W_RESIZE_CURSOR;
+                else if (right) cursor = Cursor.E_RESIZE_CURSOR;
+                else if (top) cursor = Cursor.N_RESIZE_CURSOR;
+                else if (bottom) cursor = Cursor.S_RESIZE_CURSOR;
+                component.setCursor(Cursor.getPredefinedCursor(cursor));
+            }
+
+            @Override public void mouseDragged(MouseEvent e) {
+                if (edges[0] == 0 || startPoint[0] == null || fullscreen) return;
+                Point screen = e.getLocationOnScreen();
+                int dx = screen.x - startPoint[0].x;
+                int dy = screen.y - startPoint[0].y;
+                Rectangle bounds = new Rectangle(startBounds[0]);
+                if ((edges[0] & 1) != 0) { bounds.x += dx; bounds.width -= dx; }
+                if ((edges[0] & 2) != 0) bounds.width += dx;
+                if ((edges[0] & 4) != 0) { bounds.y += dy; bounds.height -= dy; }
+                if ((edges[0] & 8) != 0) bounds.height += dy;
+                Dimension minimum = window.getMinimumSize();
+                if (bounds.width < minimum.width) {
+                    if ((edges[0] & 1) != 0) bounds.x -= minimum.width - bounds.width;
+                    bounds.width = minimum.width;
+                }
+                if (bounds.height < minimum.height) {
+                    if ((edges[0] & 4) != 0) bounds.y -= minimum.height - bounds.height;
+                    bounds.height = minimum.height;
+                }
+                window.setBounds(bounds);
+                windowedBounds = bounds;
+            }
+        });
+    }
+
+    boolean isWindowResizePoint(Point screen) {
+        if (fullscreen || window == null || (window.getExtendedState() & JFrame.MAXIMIZED_BOTH) != 0) return false;
+        Rectangle bounds = window.getBounds();
+        int margin = 8;
+        return screen.x - bounds.x < margin || bounds.x + bounds.width - screen.x < margin
+            || screen.y - bounds.y < margin || bounds.y + bounds.height - screen.y < margin;
+    }
+
+    void toggleWindowMaximize() {
+        if ((window.getExtendedState() & JFrame.MAXIMIZED_BOTH) != 0) {
+            window.setExtendedState(JFrame.NORMAL);
+            if (windowedBounds != null) window.setBounds(windowedBounds);
+        } else {
+            windowedBounds = window.getBounds();
+            window.setExtendedState(JFrame.MAXIMIZED_BOTH);
+        }
+    }
+
+    // =====================================================================
+    //  Main menu
+    // =====================================================================
+    Polygon playPoly() {
+        return new Polygon(new int[]{PLAY_X, PLAY_X, PLAY_X + PLAY_W},
+                           new int[]{PLAY_Y, PLAY_Y + PLAY_H, PLAY_Y + PLAY_H / 2}, 3);
+    }
+
+    /** What the mouse is over: 0 nothing, 1 play, 2 exit, 3 settings, 4 fullscreen toggle, 5 back/close,
+     *  6 tutorial, 7 practice, 8 help (?), 9 info (i), 10 previous page, 11 next page. */
+    int menuHit(Point p) {
+        if (mode != Mode.MENU || p == null) return 0;
+        if (panel == Panel.SETTINGS) {
+            if (fsRect.contains(p)) return 4;
+            if (muteRect.contains(p)) return 12;
+            if (volumeSliderRect.contains(p)) return 13;
+            if (backRect.contains(p)) return 5;
+            return 0;
+        }
+        if (panel != Panel.NONE) {
+            if (closeRect.contains(p)) return 5;
+            if (panel == Panel.TUTORIAL) {
+                if (tutPage > 0 && prevRect.contains(p)) return 10;
+                if (nextRect.contains(p)) return 11;
+            }
+            return 0;
+        }
+        if (menuPlayRect.contains(p)) return 1;
+        if (tutorialRect.contains(p)) return 6;
+        if (practiceRect.contains(p)) return 7;
+        if (exitRect.contains(p)) return 2;
+        if (menuSettingsRect.contains(p)) return 3;
+        if (menuHelpRect.contains(p)) return 8;
+        if (menuInfoRect.contains(p)) return 9;
+        return 0;
+    }
+
+    void menuClick(Point p) {
+        switch (menuHit(p)) {
+            case 1: launch(); break;
+            case 2: System.exit(0); break;
+            case 3: panel = Panel.SETTINGS; break;
+            case 4: toggleFullscreen(); break;
+            case 5: panel = Panel.NONE; break;
+            case 12: audio.toggleMute(); break;
+            case 13: setHomeMusicVolume(p); break;
+            case 6: panel = Panel.TUTORIAL; tutPage = 0; break;
+            case 7: launchPractice(); break;
+            case 8: panel = Panel.HELP; break;
+            case 9: panel = Panel.INFO; break;
+            case 10: tutPage = Math.max(0, tutPage - 1); break;
+            case 11:
+                if (tutPage < TUT_TITLES.length - 1) tutPage++;
+                else { panel = Panel.NONE; launchPractice(); }
+                break;
+            default: break;
+        }
+    }
+
+    void menuButton(Graphics2D g, Rectangle r, String label, boolean enabled, boolean hover) {
+        if (enabled) {
+            g.setColor(hover ? new Color(255, 241, 168) : new Color(40, 34, 80));
+            g.fillRect(r.x, r.y, r.width, r.height);
+            g.setColor(new Color(255, 241, 168)); g.setStroke(new BasicStroke(3));
+            g.drawRect(r.x, r.y, r.width, r.height);
+            g.setColor(hover ? new Color(40, 30, 10) : Color.WHITE);
+        } else {
+            g.setColor(new Color(30, 28, 52));
+            g.fillRect(r.x, r.y, r.width, r.height);
+            g.setColor(new Color(78, 74, 108)); g.setStroke(new BasicStroke(2));
+            g.drawRect(r.x, r.y, r.width, r.height);
+            g.setColor(new Color(125, 122, 150));
+        }
+        g.setStroke(new BasicStroke(1));
+        g.setFont(pixelFont(Font.BOLD, 30));
+        centerText(g, label, r.x + r.width / 2, r.y + r.height / 2 + 10);
+    }
+
+    void menuDot(Graphics2D g, int cx, int cy, String label, boolean hover) {
+        g.setColor(hover ? new Color(255, 241, 168) : new Color(40, 34, 80));
+        g.fillRect(cx - ICON_R, cy - ICON_R, ICON_R * 2, ICON_R * 2);
+        g.setColor(new Color(255, 241, 168)); g.setStroke(new BasicStroke(2));
+        g.drawRect(cx - ICON_R, cy - ICON_R, ICON_R * 2, ICON_R * 2);
+        g.setStroke(new BasicStroke(1));
+        g.setColor(hover ? new Color(40, 30, 10) : Color.WHITE);
+        g.setFont(pixelFont(Font.BOLD, 26));
+        centerText(g, label, cx, cy + 9);
+    }
+
+    void drawGear(Graphics2D g, int cx, int cy, int r, boolean hover) {
+        AffineTransform old = g.getTransform();
+        g.translate(cx, cy);
+        if (hover) g.rotate(Math.toRadians(frame * 2.0));
+        g.setColor(hover ? new Color(85, 155, 235) : new Color(40, 100, 165));
+        for (int k = 0; k < 8; k++) { g.fillRoundRect(-6, -r, 12, r / 2, 3, 3); g.rotate(Math.PI / 4); }
+        g.fillOval(-(r - 6), -(r - 6), 2 * (r - 6), 2 * (r - 6));
+        g.setColor(new Color(235, 240, 250));
+        g.fillOval(-r / 3, -r / 3, 2 * r / 3, 2 * r / 3);
+        g.setTransform(old);
+    }
+
+    void paintMenu(Graphics2D g) {
+        int w = getWidth(), h = getHeight();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g.setColor(Color.BLACK); g.fillRect(0, 0, w, h);
+        paintSides(g);
+        AffineTransform base = g.getTransform();
+        g.translate(offX, offY); g.scale(scale, scale);
+
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        if (menuBackground != null) menuBackground.paintIcon(this, g, 0, 0);
+        g.setColor(new Color(0, 0, 0, 55)); g.fillRect(0, 0, PW, PH);
+
+        int hit = panel != Panel.NONE ? 0 : menuHit(mouse);
+        double playScale = hit == 1 ? 1.08 : 1.0;
+        int playW = (int) (menuPlayRect.width * playScale);
+        int playH = (int) (menuPlayRect.height * playScale);
+        int playX = menuPlayRect.x + (menuPlayRect.width - playW) / 2;
+        int playY = menuPlayRect.y + (menuPlayRect.height - playH) / 2;
+        g.drawImage(menuPlay, playX, playY, playW, playH, null);
+
+        // Tutorial / Practice / Exit - all clickable
+        menuButton(g, tutorialRect, "Tutorial", true, hit == 6);
+        menuButton(g, practiceRect, "Practice", true, hit == 7);
+        menuButton(g, exitRect, "Exit", true, hit == 2);
+
+        g.drawImage(menuHelp, menuHelpRect.x, menuHelpRect.y, menuHelpRect.width, menuHelpRect.height, null);
+        g.drawImage(menuInfo, menuInfoRect.x, menuInfoRect.y, menuInfoRect.width, menuInfoRect.height, null);
+        g.drawImage(menuSettings, menuSettingsRect.x, menuSettingsRect.y, menuSettingsRect.width, menuSettingsRect.height, null);
+
+        if (panel != Panel.NONE) {
+            g.setTransform(base);
+            g.setColor(new Color(0, 0, 0, 175)); g.fillRect(0, 0, w, h);
+            g.translate(offX, offY); g.scale(scale, scale);
+            int ph = menuHit(mouse);
+            if (panel == Panel.SETTINGS) drawSettingsPanel(g, ph);
+            else drawBigPanel(g, ph);
+        }
+        g.setTransform(base);
+    }
+
+    void drawSettingsPanel(Graphics2D g, int ph) {
+        g.setColor(new Color(16, 14, 34)); g.fillRect(230, 165, 500, 410);
+        g.setColor(new Color(255, 241, 168)); g.setStroke(new BasicStroke(3));
+        g.drawRect(230, 165, 500, 410);
+        g.setStroke(new BasicStroke(1));
+        g.setFont(pixelFont(Font.BOLD, 38));
+        g.setColor(new Color(255, 241, 168)); centerText(g, "SETTINGS", PW / 2, 220);
+        g.setFont(pixelFont(Font.BOLD, 26));
+        g.setColor(Color.WHITE); g.drawString("Fullscreen", 270, 278);
+        menuButton(g, fsRect, fullscreen ? "ON" : "OFF", true, ph == 4);
+        g.setFont(pixelFont(Font.BOLD, 26));
+        g.setColor(Color.WHITE); g.drawString("Mute", 270, 348);
+        menuButton(g, muteRect, audio.isMuted() ? "ON" : "OFF", true, ph == 12);
+        g.setFont(pixelFont(Font.BOLD, 26));
+        g.setColor(Color.WHITE); g.drawString("Music volume", 270, 407);
+        int trackY = volumeSliderRect.y + volumeSliderRect.height / 2 - 4;
+        g.setColor(new Color(40, 34, 80));
+        g.fillRoundRect(volumeSliderRect.x, trackY, volumeSliderRect.width, 8, 8, 8);
+        int filledWidth = Math.round(volumeSliderRect.width * audio.getMusicVolume());
+        g.setColor(new Color(255, 241, 168));
+        g.fillRoundRect(volumeSliderRect.x, trackY, filledWidth, 8, 8, 8);
+        int knobX = volumeSliderRect.x + filledWidth;
+        g.setColor(new Color(255, 241, 168));
+        g.fillOval(knobX - 9, trackY - 5, 18, 18);
+        g.setColor(Color.WHITE);
+        g.drawOval(knobX - 9, trackY - 5, 18, 18);
+        g.setFont(pixelFont(Font.BOLD, 16));
+        g.setColor(new Color(160, 160, 190)); centerText(g, "F11 or Alt+Enter toggles fullscreen", PW / 2, 460);
+        menuButton(g, backRect, "BACK", true, ph == 5);
+    }
+
+    void drawBigPanel(Graphics2D g, int ph) {
+        Rectangle p = panelRect;
+        g.setColor(new Color(16, 14, 34)); g.fillRect(p.x, p.y, p.width, p.height);
+        g.setColor(new Color(255, 241, 168)); g.setStroke(new BasicStroke(3));
+        g.drawRect(p.x, p.y, p.width, p.height);
+        g.setStroke(new BasicStroke(1));
+        int tx = p.x + 40, tw = p.width - 80;
+        Color gold = new Color(255, 241, 168), light = new Color(235, 230, 215), cyan = new Color(150, 230, 255);
+
+        if (panel == Panel.TUTORIAL) {
+            g.setFont(pixelFont(Font.BOLD, 36));
+            g.setColor(gold); centerText(g, "TUTORIAL - " + TUT_TITLES[tutPage], PW / 2, 168);
+            g.setFont(pixelFont(Font.BOLD, 14));
+            g.setColor(new Color(160, 160, 190)); centerText(g, "Page " + (tutPage + 1) + " of " + TUT_TITLES.length, PW / 2, 192);
+            if (tutPage < 3) {
+                g.setFont(pixelFont(Font.BOLD, 20));
+                g.setColor(light);
+                drawWrapped(g, TUT_TEXT[tutPage], tx, 232, tw, 30);
+                drawTutorialArt(g, tutPage);
+            } else {
+                int y = 230;
+                for (int i = 0; i < 5; i++) {
+                    String name = i < 4 ? ITEMS[i] : SEAL;
+                    String desc = i < 4 ? ITEM_DESC[i] + "  [" + ITEM_KEY[i] + "]" : "Recovered at the end. It holds the final choice.";
+                    sprite(g, ICONS[i], tx, y - 26, 4, null, null, false);
+                    g.setFont(pixelFont(Font.BOLD, 20)); g.setColor(gold); g.drawString(name, tx + 50, y - 8);
+                    g.setFont(pixelFont(Font.BOLD, 16)); g.setColor(light); g.drawString(desc, tx + 50, y + 14);
+                    y += 62;
+                }
+                g.setFont(pixelFont(Font.BOLD, 14));
+                g.setColor(cyan); centerText(g, "Click an item in the top-right bar, or press its key, when choosing a cave.", PW / 2, 540);
+            }
+            if (tutPage > 0) menuButton(g, prevRect, "BACK", true, ph == 10);
+            menuButton(g, closeRect, "CLOSE", true, ph == 5);
+            menuButton(g, nextRect, tutPage < TUT_TITLES.length - 1 ? "NEXT" : "PRACTICE", true, ph == 11);
+        } else if (panel == Panel.HELP) {
+            g.setFont(pixelFont(Font.BOLD, 36));
+            g.setColor(gold); centerText(g, "CONTROLS", PW / 2, 168);
+            String[][] rows = {
+                {"Click / SPACE / ENTER", "Advance the story text"},
+                {"Y / N  or  click", "Answer yes / no questions"},
+                {"Click a cave / 1-5", "Choose a cave entrance"},
+                {"P  M  G  C", "Use Potion, Map, Grimoire, Charm"},
+                {"Click item bar", "Use that item (when choosing)"},
+                {"F11 / Alt+Enter", "Toggle fullscreen"},
+                {"Esc", "Pause / resume; close menu panels"}
+            };
+            int y = 225;
+            for (String[] r : rows) {
+                g.setFont(pixelFont(Font.BOLD, 19)); g.setColor(gold); g.drawString(r[0], tx, y);
+                g.setFont(pixelFont(Font.BOLD, 18)); g.setColor(light); g.drawString(r[1], tx + 320, y);
+                y += 44;
+            }
+            menuButton(g, closeRect, "CLOSE", true, ph == 5);
+        } else {
+            g.setFont(pixelFont(Font.BOLD, 36));
+            g.setColor(gold); centerText(g, "ABOUT", PW / 2, 168);
+            g.setFont(pixelFont(Font.BOLD, 20));
+            g.setColor(light);
+            int y = 215;
+            y = drawWrapped(g, "GOBLINS AND CAVERNS", tx, y, tw, 30) + 6;
+            g.setColor(light);
+            y = drawWrapped(g, "A forgetful mage wakes in a cavern and finds his belongings stolen. Follow the thief through dark cave "
+                + "entrances, recover five lost items, and uncover the truth behind the Curse of Mana.", tx, y, tw, 30) + 10;
+            g.setColor(cyan);
+            y = drawWrapped(g, "30 HP  -  2 Light Spells per round  -  usable items", tx, y, tw, 30) + 10;
+            g.setColor(new Color(170, 170, 200));
+            g.setFont(pixelFont(Font.BOLD, 16));
+            y = drawWrapped(g, "Made with Java Swing. All art is drawn in code. Runs in a 960 x 720 window or Fullscreen 1920 x 1080.", tx, y, tw, 26);
+            menuButton(g, closeRect, "CLOSE", true, ph == 5);
+        }
+    }
+
+    void drawTutorialArt(Graphics2D g, int page) {
+        int cy = 470;
+        if (page == 0) {
+            sprite(g, GOBLIN, PW / 2 - 130, cy - 40, 5, null, null, false);
+            for (int i = 0; i < 3; i++) {
+                g.setColor(new Color(60, 54, 76)); g.fill(caveShape(PW / 2 - 40 + i * 60, cy - 36, 40, 80, 3, 40L + i));
+                g.setColor(new Color(6, 5, 10)); g.fill(caveShape(PW / 2 - 40 + i * 60, cy - 36, 40, 80, 0, 40L + i));
+            }
+        } else if (page == 1) {
+            for (int i = 0; i < 3; i++) {
+                int ox = PW / 2 - 100 + i * 100;
+                glow(g, ox, cy, 50, new Color(255, 241, 168), 160);
+                g.setColor(new Color(255, 252, 215)); g.fillOval(ox - 10, cy - 10, 20, 20);
+            }
+        } else {
+            sprite(g, SNAKE, PW / 2 - 200, cy - 30, 6, null, null, false);
+            g.setColor(new Color(30, 30, 50)); g.fillRect(PW / 2 - 30, cy - 12, 240, 28);
+            g.setColor(new Color(70, 190, 90)); g.fillRect(PW / 2 - 30, cy - 12, 160, 28);
+            g.setColor(Color.WHITE); g.drawRect(PW / 2 - 30, cy - 12, 240, 28);
+            g.setFont(pixelFont(Font.BOLD, 18));
+            centerText(g, "-10 HP per snake", PW / 2 + 90, cy + 42);
+        }
+    }
+
+    void drawEndScreen(Graphics2D g) {
+        g.setColor(new Color(0, 0, 0, 175)); g.fillRect(0, 0, PW, PH);
+        g.setFont(pixelFont(Font.BOLD, 56));
+        g.setColor(new Color(255, 241, 168)); centerText(g, practice ? "PRACTICE COMPLETE" : "CAVERN CLEARED", PW / 2, 150);
+        g.setFont(fText);
+        if (practice) {
+            g.setColor(new Color(150, 230, 255)); centerText(g, "You cleared all 5 rounds.", PW / 2, 200);
+            g.setColor(new Color(245, 235, 210)); centerText(g, "HP left: " + hp + "/" + HP_MAX, PW / 2, 300);
+            g.setFont(pixelFont(Font.BOLD, 30));
+            g.setColor(new Color(255, 241, 168)); centerText(g, "Ready for the real thing?", PW / 2, 420);
+        } else {
+            g.setColor(new Color(150, 230, 255)); centerText(g, "OBJECTIVE COMPLETE: REMEMBER.", PW / 2, 200);
+            g.setColor(new Color(245, 235, 210)); centerText(g, "Ending: " + endingName, PW / 2, 245);
+            int x0 = PW / 2 - 5 * 56 / 2;
+            for (int i = 0; i < 5; i++) {
+                String name = i < 4 ? ITEMS[i] : SEAL;
+                sprite(g, ICONS[i], x0 + i * 56, 285, 5, inventory.contains(name) ? null : new Color(50, 50, 70), null, false);
+            }
+            g.setColor(new Color(245, 235, 210));
+            centerText(g, "Items recovered: " + inventory.size() + "/5", PW / 2, 370);
+            centerText(g, "HP left: " + hp + "/" + HP_MAX, PW / 2, 405);
+            g.setFont(pixelFont(Font.BOLD, 30));
+            g.setColor(new Color(255, 241, 168)); centerText(g, "THANK YOU FOR PLAYING!", PW / 2, 480);
+        }
+        drawButton(g, againRect, practice ? "TRY AGAIN" : "PLAY AGAIN", "");
+        drawButton(g, menuRect, "MAIN MENU", "");
+    }
+
+    void drawOverScreen(Graphics2D g) {
+        g.setColor(new Color(0, 0, 0, 200)); g.fillRect(0, 0, PW, PH);
+        g.setFont(pixelFont(Font.BOLD, 72));
+        g.setColor(new Color(220, 50, 50)); centerText(g, "GAME OVER", PW / 2, 280);
+        g.setFont(fText);
+        g.setColor(new Color(200, 200, 225)); centerText(g, "Your HP drops to zero. The darkness swallows the mage...", PW / 2, 340);
+        drawButton(g, againRect, "TRY AGAIN", "");
+        drawButton(g, menuRect, "MAIN MENU", "");
+    }
+
+    // =====================================================================
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> {
+            JFrame f = new JFrame("Goblins and Caverns");
+            GoblinDoorsGUI panel = new GoblinDoorsGUI();
+            panel.window = f;
+            f.setUndecorated(true);
+            f.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            panel.windowRoot = new JPanel(new BorderLayout());
+            panel.windowRoot.setBorder(BorderFactory.createEmptyBorder());
+            panel.titleBar = panel.createTitleBar();
+            panel.titleBar.setVisible(false);
+            panel.windowRoot.add(panel.titleBar, BorderLayout.NORTH);
+            panel.windowRoot.add(panel, BorderLayout.CENTER);
+            f.setContentPane(panel.windowRoot);
+            f.setResizable(true);
+            f.addWindowStateListener(e -> panel.updateWindowChrome());
+            panel.addWindowResizeHandlers(panel);
+            f.pack();
+            f.setMinimumSize(new Dimension(480, 360));
+            f.setLocationRelativeTo(null);
+            panel.windowedBounds = f.getBounds();
+            panel.fullscreen = true;
+            f.setExtendedState(JFrame.MAXIMIZED_BOTH);
+            f.setVisible(true);
+            panel.requestFocusInWindow();
+        });
+    }
+}

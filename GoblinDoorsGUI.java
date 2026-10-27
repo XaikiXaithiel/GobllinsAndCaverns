@@ -29,6 +29,7 @@ public class GoblinDoorsGUI extends JPanel {
     // ---------- Sizes ----------
     static final int W = 320, H = 240, SH = 160, S = 3;     // logical canvas, scene height, scale
     static final int PW = W * S, PH = H * S;
+    static final String WINDOW_ICON_PATH = "icons/favicon.png";
     static final int HP_MAX = 30, SNAKE_DMG = 10, MAXN = 5;
     static final int LOADING_FADE_MS = 350, LOADING_HOLD_MS = 2650;
     static final int LOADING_TIP_INTERVAL_MS = 900, LOADING_TIP_TRANSITION_MS = 200;
@@ -135,6 +136,25 @@ public class GoblinDoorsGUI extends JPanel {
                 g.fillRect(x + cx * sc, y + r * sc, sc, sc);
             }
         }
+    }
+
+    static Image loadWindowIcon() {
+        java.io.File file = GameAssets.resolveFile(WINDOW_ICON_PATH);
+        if (file != null) {
+            ImageIcon icon = new ImageIcon(file.getAbsolutePath());
+            if (icon.getIconWidth() > 0 && icon.getIconHeight() > 0) return icon.getImage();
+            System.err.println("Could not load window icon: " + file.getAbsolutePath());
+        }
+
+        BufferedImage placeholder = new BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = placeholder.createGraphics();
+        g.setColor(new Color(35, 25, 50));
+        g.fillRect(0, 0, 32, 32);
+        g.setColor(new Color(255, 241, 168));
+        g.drawRect(0, 0, 31, 31);
+        sprite(g, GOBLIN, 2, 3, 2, null, null, false);
+        g.dispose();
+        return placeholder;
     }
 
     void drawItemIcon(Graphics2D g, int index, int x, int y, int sc, Color mono) {
@@ -2289,6 +2309,7 @@ public class GoblinDoorsGUI extends JPanel {
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
             JFrame f = new JFrame("Goblins and Caverns");
+            f.setIconImage(loadWindowIcon());
             GoblinDoorsGUI panel = new GoblinDoorsGUI();
             panel.window = f;
             f.setUndecorated(true);

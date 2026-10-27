@@ -12,3 +12,9 @@ into `.build/`, keeping generated class files separate from the game files.
 
 To move the game to another computer, copy the entire `GoblinsAndCaverns`
 folder and run the launcher for that computer's operating system.
+
+## Window icon
+
+The window uses a Goblin placeholder icon by default. To use a custom icon,
+add a PNG image at `icons/favicon.png`; it will be picked up the next time the
+game starts.

@@ -1,0 +1,5 @@
+{
+    "java.project.referencedLibraries": [
+        ".deps/jna-5.14.0.jar"
+    ]
+}

@@ -33,6 +33,11 @@ public class GoblinDoorsGUI extends JPanel {
     static final int HP_MAX = 30, SNAKE_DMG = 10, MAXN = 5;
     static final int LOADING_FADE_MS = 350, LOADING_HOLD_MS = 2650;
     static final int LOADING_TIP_INTERVAL_MS = 900, LOADING_TIP_TRANSITION_MS = 200;
+    static final int PAD_DPAD_UP = 0x0001, PAD_DPAD_DOWN = 0x0002;
+    static final int PAD_DPAD_LEFT = 0x0004, PAD_DPAD_RIGHT = 0x0008;
+    static final int PAD_START = 0x0010, PAD_BACK = 0x0020;
+    static final int PAD_LEFT_SHOULDER = 0x0100, PAD_RIGHT_SHOULDER = 0x0200;
+    static final int PAD_A = 0x1000, PAD_B = 0x2000, PAD_X = 0x4000, PAD_Y = 0x8000;
     static final String[] LOADING_TIPS = {
         "Light up a cave to peek inside.",
         "A snake bite costs " + SNAKE_DMG + " HP.",
@@ -66,7 +71,7 @@ public class GoblinDoorsGUI extends JPanel {
     };
     static final String SEAL = "Curse's Seal";
 
-    enum PathType { ITEM, SNAKE, DEAD_END }
+    enum PathType { ITEM, SNAKE }
     enum Scene { TITLE, CAMP, TUNNEL, DOORS, FINAL, MEMORY, FORGIVE, ATONE }
     enum Mode { NONE, TEXT, AUTO, YESNO, DOOR, MENU, LOADING, END, OVER }
     enum Panel { NONE, SETTINGS, TUTORIAL, HELP, INFO }
@@ -235,8 +240,9 @@ public class GoblinDoorsGUI extends JPanel {
     final boolean[] open = new boolean[MAXN];
     final boolean[] peek = new boolean[MAXN];
     final boolean[] doorOpen = new boolean[MAXN];
-    final int[] blocked = new int[MAXN];            // 0 none, 1 snake, 2 dead end, 3 sealed by map
+    final int[] blocked = new int[MAXN];            // 0 none, 1 snake, 3 sealed by map
     int itemShow = -1;
+    int itemDoor = -1;
     String endingName = "";
     String doorPurpose = "";                         // "light" or "walk"
     final Random rng = new Random();
@@ -277,6 +283,8 @@ public class GoblinDoorsGUI extends JPanel {
     ImageIcon menuBackground;
     ImageIcon[] storyScenes;
     ImageIcon wizardCharacter;
+    ImageIcon holyWizard;
+    ImageIcon goblinStartled;
     ImageIcon potionIcon;
     ImageIcon dialogueBox, heartFilled, heartEmpty;
     Image menuPlay, menuHelp, menuInfo, menuSettings;
@@ -311,6 +319,8 @@ public class GoblinDoorsGUI extends JPanel {
     Panel panel = Panel.NONE;
     int tutPage;
     boolean fullscreen;
+    final XInputController controller;
+    boolean controllerConnected, controllerCursorVisible;
     JFrame window;                     // set by main(); null when rendered headless
     Rectangle windowedBounds;
     JPanel windowRoot, titleBar;
@@ -320,12 +330,12 @@ public class GoblinDoorsGUI extends JPanel {
     static final String[] TUT_TEXT = {
         "A thief stole your belongings and fled into a big cavern full of dark cave entrances. "
         + "Each round you must choose ONE cave to walk into. Rounds 1-2 show 3 caves. Rounds 3-5 show 5 caves. "
-        + "One cave holds your stolen item. The others hide snakes or dead ends.",
+        + "One cave holds your stolen item. Snakes guard every other cave.",
         "You can cast 2 Light Spells every round. A Light Spell lights up one cave entrance so you can peek inside: "
-        + "you will see an item, a snake, or a dead end. The light fades after a moment, so remember what you saw! "
-        + "Your Light Spells refill at the start of every round.",
+        + "you will see your item or a snake. The light fades after a moment, so remember what you saw! "
+        + "Use all available Light Spells before choosing a cave to enter. Your Light Spells refill at the start of every round.",
         "You have 30 HP for the whole journey. Walking into a snake's cave costs 10 HP. "
-        + "A dead end costs nothing, but the cave collapses and cannot be used again. "
+        + "After a snake attacks, that cave is blocked and cannot be used again. "
         + "If your HP reaches 0, it is game over."
     };
 
@@ -440,9 +450,9 @@ public class GoblinDoorsGUI extends JPanel {
         audio.stopCaveAmbience();
         hp = HP_MAX; hpShown = HP_MAX; ward = false; lastBlocked = false;
         inventory.clear(); used.clear(); logs.clear(); queue.clear();
-        roundNo = 0; spells = 2; maxSpells = 2; nDoors = 3; itemShow = -1;
+        roundNo = 0; spells = 2; maxSpells = 2; nDoors = 3; itemShow = -1; itemDoor = -1;
         sleeping = false; goblinVisible = false;
-        Arrays.fill(types, PathType.DEAD_END);
+        Arrays.fill(types, PathType.SNAKE);
         resetCaves();
         flash = hurt = shake = 0;
         cur = ""; reveal = 0; yesNoCb = null; doorCb = null; blocking = false;
@@ -541,13 +551,11 @@ public class GoblinDoorsGUI extends JPanel {
         nDoors = r <= 2 ? 3 : 5;
         List<PathType> t = new ArrayList<>();
         t.add(PathType.ITEM);
-        t.add(PathType.SNAKE);
-        if (nDoors == 5) t.add(PathType.SNAKE);
-        while (t.size() < nDoors) t.add(PathType.DEAD_END);
+        while (t.size() < nDoors) t.add(PathType.SNAKE);
         Collections.shuffle(t, rng);
-        for (int i = 0; i < MAXN; i++) types[i] = i < nDoors ? t.get(i) : PathType.DEAD_END;
+        for (int i = 0; i < MAXN; i++) types[i] = i < nDoors ? t.get(i) : PathType.SNAKE;
         resetCaves();
-        itemShow = -1;
+        itemShow = -1; itemDoor = -1;
         scene = Scene.DOORS;
         if (practice) used.clear();
 
@@ -557,46 +565,35 @@ public class GoblinDoorsGUI extends JPanel {
         L.add(sys(nDoors + " CAVE ENTRANCES"));
         L.add(sys("LIGHT SPELLS: 2/2"));
         if (r == 2 && !practice) L.add(sys("WARNING: Memories may affect your choices."));
-        if (r == 3 && !practice) L.add(sys("Two snakes now lurk among the caves."));
+        if (r == 3 && !practice) L.add(sys("Four snakes now lurk among the caves."));
         L.add(act(this::lightPhase));
         insert(L);
     }
 
     void lightPhase() {
         if (spells <= 0) {
-            insert(sys("No Light Spells left. You must choose."), act(this::walkPhase));
+            insert(sys("All Light Spells used. Choose a cave to enter."), act(this::walkPhase));
             return;
         }
-        insert(askYesNo("Use a Light Spell?", yes -> {
-            if (!yes) { insert(act(this::walkPhase)); return; }
-            insert(askDoor("light", "Which cave entrance would you like to light up?", v -> {
-                final int left = spells - 1;
-                final int r = roundNo;
-                String desc;
-                switch (types[v]) {
-                    case ITEM:
-                        desc = r == 5 ? "The light finds a faint red glow deep inside cave " + roman(v) + "... and something watching from the dark."
-                                      : "The darkness fades. Something glints on the floor of cave " + roman(v) + "...";
-                        break;
-                    case SNAKE: desc = "The darkness fades. Cave " + roman(v) + " is alive with coiled shapes and a low, hungry hiss..."; break;
-                    default:    desc = "The darkness fades. Cave " + roman(v) + " ends in a solid wall of fallen rock..."; break;
-                }
-                insert(
-                    act(() -> { spells--; flash = 0.3; }),
-                    act(() -> peek[v] = true),
-                    sys("Light Spell Used"),
-                    sys("Remaining Spells: " + left + "/" + maxSpells),
-                    say(desc),
-                    say("The light fades little by little."),
-                    act(() -> peek[v] = false),
-                    sys("LIGHT ENDED"),
-                    askYesNo("Would you like to choose the cave you'll walk into?", chosen -> {
-                        if (chosen) insert(act(this::walkPhase));
-                        else if (spells > 0) insert(sys("Remaining Light Spells: " + spells + "/" + maxSpells), act(this::lightPhase));
-                        else insert(sys("No Light Spells left. You must choose."), act(this::walkPhase));
-                    })
-                );
-            }));
+        insert(askDoor("light", "Which cave entrance would you like to light? "
+            + "Spells remaining: " + spells + "/" + maxSpells, v -> {
+            final int left = spells - 1;
+            final int r = roundNo;
+            String desc = types[v] == PathType.ITEM
+                ? (r == 5 ? "The light finds a faint red glow deep inside cave " + roman(v) + "... and something watching from the dark."
+                          : "The darkness fades. Something glints on the floor of cave " + roman(v) + "...")
+                : "The darkness fades. Cave " + roman(v) + " is alive with coiled shapes and a low, hungry hiss...";
+            insert(
+                act(() -> { spells--; flash = 0.3; }),
+                act(() -> peek[v] = true),
+                sys("Light Spell Used"),
+                sys("Remaining Spells: " + left + "/" + maxSpells),
+                say(desc),
+                say("The light fades little by little."),
+                act(() -> peek[v] = false),
+                sys("LIGHT ENDED"),
+                act(this::lightPhase)
+            );
         }));
     }
 
@@ -610,22 +607,22 @@ public class GoblinDoorsGUI extends JPanel {
                 case ITEM: {
                     if (practice) {
                         L.add(say("Practice: you found the item for round " + r + "!"));
-                        L.add(act(() -> { itemShow = r - 1; flash = 0.5; }));
+                        L.add(act(() -> { itemShow = r - 1; itemDoor = p; flash = 0.5; }));
                         L.add(say(r < 5 ? "Nice work. On to the next round." : "That was the last round."));
-                        L.add(act(() -> { itemShow = -1; if (r < 5) startRound(r + 1); else practiceDone(); }));
+                        L.add(act(() -> { itemShow = -1; itemDoor = -1; if (r < 5) startRound(r + 1); else practiceDone(); }));
                     } else if (r == 5) {
                         L.add(act(this::finalRound));
                     } else {
                         final String item = ITEMS[r - 1];
                         L.add(say("He finds his item on the cave floor: " + item + "!"));
-                        L.add(act(() -> { inventory.add(item); itemShow = r - 1; flash = 0.5; }));
+                        L.add(act(() -> { inventory.add(item); itemShow = r - 1; itemDoor = p; flash = 0.5; }));
                         L.add(sys("One item recovered"));
                         L.add(sys((5 - r) + " items remaining."));
                         L.add(sys(ITEM_SHORT[r - 1]));
                         L.add(say("Upon touching it, a memory flashes through his mind..."));
                         L.add(say(MEMORIES[r - 1]));
                         L.add(say(MEMORY_NOTES[r - 1]));
-                        L.add(act(() -> { itemShow = -1; startRound(r + 1); }));
+                        L.add(act(() -> { itemShow = -1; itemDoor = -1; startRound(r + 1); }));
                     }
                     break;
                 }
@@ -636,11 +633,6 @@ public class GoblinDoorsGUI extends JPanel {
                         ? "The ward flares and the fangs glance off. He backs out into the cavern."
                         : "The fangs sink in. -" + SNAKE_DMG + " HP. He staggers back out into the cavern."))));
                     L.add(act(() -> { doorOpen[p] = false; open[p] = false; blocked[p] = 1; }));
-                    L.add(act(this::lightPhase));
-                    break;
-                default:
-                    L.add(say("A dead end. Fallen rock blocks the way, and he turns back to the cavern."));
-                    L.add(act(() -> { doorOpen[p] = false; open[p] = false; blocked[p] = 2; }));
                     L.add(act(this::lightPhase));
                     break;
             }
@@ -931,6 +923,7 @@ public class GoblinDoorsGUI extends JPanel {
     public GoblinDoorsGUI() {
         setPreferredSize(new Dimension(PW, PH));
         setFocusable(true);
+        controller = XInputController.connect();
         menuBackground = GameAssets.loadImage("images/download.gif");
         storyScenes = new ImageIcon[] {
             GameAssets.loadImage("scenes/scene1.gif"),
@@ -938,6 +931,8 @@ public class GoblinDoorsGUI extends JPanel {
             GameAssets.loadImage("scenes/scene3.gif")
         };
         wizardCharacter = GameAssets.loadImage("images/wizard_cs.gif");
+        holyWizard = GameAssets.loadImage("images/holyWizard.gif");
+        goblinStartled = GameAssets.loadImage("images/goblinStartled.gif");
         potionIcon = GameAssets.loadImage("icons/potion.png");
         dialogueBox = GameAssets.loadImage("images/dialogueBox.png");
         heartFilled = GameAssets.loadImage("icons/heart_filled.png");
@@ -952,14 +947,19 @@ public class GoblinDoorsGUI extends JPanel {
         addMouseListener(new MouseAdapter() {
             @Override public void mousePressed(MouseEvent e) {
                 requestFocusInWindow();
+                controllerCursorVisible = false;
                 if (SwingUtilities.isLeftMouseButton(e) && !isWindowResizePoint(e.getLocationOnScreen())) {
                     click(toVirtual(e.getPoint()));
                 }
             }
         });
         addMouseMotionListener(new MouseMotionAdapter() {
-            @Override public void mouseMoved(MouseEvent e) { mouse = toVirtual(e.getPoint()); }
+            @Override public void mouseMoved(MouseEvent e) {
+                controllerCursorVisible = false;
+                mouse = toVirtual(e.getPoint());
+            }
             @Override public void mouseDragged(MouseEvent e) {
+                controllerCursorVisible = false;
                 mouse = toVirtual(e.getPoint());
                 if (mode == Mode.MENU && panel == Panel.SETTINGS) setHomeMusicVolume(mouse);
             }
@@ -1028,6 +1028,7 @@ public class GoblinDoorsGUI extends JPanel {
     }
 
     void tick() {
+        tickController();
         if (paused) {
             Cursor want = Cursor.getPredefinedCursor(overClickable() ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR);
             if (getCursor().getType() != want.getType()) setCursor(want);
@@ -1060,6 +1061,64 @@ public class GoblinDoorsGUI extends JPanel {
         Cursor want = Cursor.getPredefinedCursor(overClickable() ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR);
         if (getCursor().getType() != want.getType()) setCursor(want);
         repaint();
+    }
+
+    void tickController() {
+        if (controller == null) return;
+        XInputController.PadState state = controller.poll();
+        if (state == null) {
+            controllerConnected = false;
+            controllerCursorVisible = false;
+            return;
+        }
+        if (!controllerConnected) {
+            controllerConnected = true;
+            controllerCursorVisible = true;
+            mouse = new Point(PW / 2, PH / 2);
+        }
+
+        float x = Math.abs(state.leftX) < 0.18f ? 0f
+            : Math.copySign((Math.abs(state.leftX) - 0.18f) / 0.82f, state.leftX);
+        float y = Math.abs(state.leftY) < 0.18f ? 0f
+            : -Math.copySign((Math.abs(state.leftY) - 0.18f) / 0.82f, state.leftY);
+        if ((state.buttons & PAD_DPAD_LEFT) != 0) x -= 1f;
+        if ((state.buttons & PAD_DPAD_RIGHT) != 0) x += 1f;
+        if ((state.buttons & PAD_DPAD_UP) != 0) y -= 1f;
+        if ((state.buttons & PAD_DPAD_DOWN) != 0) y += 1f;
+
+        int moveX = Math.round(Math.max(-1f, Math.min(1f, x)) * 12);
+        int moveY = Math.round(Math.max(-1f, Math.min(1f, y)) * 12);
+        if (moveX != 0 || moveY != 0) {
+            controllerCursorVisible = true;
+            mouse = new Point(Math.max(0, Math.min(PW - 1, mouse.x + moveX)),
+                Math.max(0, Math.min(PH - 1, mouse.y + moveY)));
+        }
+
+        int pressed = state.pressed;
+        if (pressed != 0) controllerCursorVisible = true;
+        if ((pressed & PAD_A) != 0) click(new Point(mouse));
+        if ((pressed & PAD_B) != 0) controllerBack();
+        if ((pressed & (PAD_START | PAD_BACK)) != 0) {
+            if (paused) setPaused(false);
+            else if (canPause()) setPaused(true);
+        }
+        if ((pressed & PAD_X) != 0) useItem(0);
+        if ((pressed & PAD_Y) != 0) useItem(1);
+        if ((pressed & PAD_LEFT_SHOULDER) != 0) useItem(2);
+        if ((pressed & PAD_RIGHT_SHOULDER) != 0) useItem(3);
+    }
+
+    void controllerBack() {
+        if (paused) {
+            if (confirmingExit) confirmingExit = false;
+            else setPaused(false);
+        } else if (mode == Mode.YESNO) {
+            answerYesNo(false);
+        } else if (mode == Mode.MENU && panel != Panel.NONE) {
+            panel = Panel.NONE;
+        } else if (canPause()) {
+            setPaused(true);
+        }
     }
 
     // =====================================================================
@@ -1146,15 +1205,23 @@ public class GoblinDoorsGUI extends JPanel {
     }
 
     void drawMage(Graphics2D g, int x, int y, int sc) {
-        if (wizardCharacter == null || wizardCharacter.getIconWidth() <= 0 || wizardCharacter.getIconHeight() <= 0) {
+        drawWizard(g, wizardCharacter, x, y, sc);
+    }
+
+    void drawHolyWizard(Graphics2D g, int x, int y, int sc) {
+        drawWizard(g, holyWizard, x, y, sc);
+    }
+
+    void drawWizard(Graphics2D g, ImageIcon wizard, int x, int y, int sc) {
+        if (wizard == null || wizard.getIconWidth() <= 0 || wizard.getIconHeight() <= 0) {
             return;
         }
         int pixelHeight = 20 * sc;
         int pixelWidth = 16 * sc;
         int targetHeight = Math.max(1, Math.round(pixelHeight * 1.5f));
         int targetWidth = Math.max(1, Math.round(targetHeight
-            * (float) wizardCharacter.getIconWidth() / wizardCharacter.getIconHeight()));
-        g.drawImage(wizardCharacter.getImage(), x - (targetWidth - pixelWidth) / 2,
+            * (float) wizard.getIconWidth() / wizard.getIconHeight()));
+        g.drawImage(wizard.getImage(), x - (targetWidth - pixelWidth) / 2,
             y + pixelHeight - targetHeight, targetWidth, targetHeight, null);
     }
 
@@ -1210,6 +1277,7 @@ public class GoblinDoorsGUI extends JPanel {
         int cx = x + w / 2;
         switch (types[i]) {
             case ITEM: {
+                if (itemShow >= 0 && itemDoor == i) break;
                 int bob = (int) (Math.sin(frame * 0.15) * 2);
                 glow(g, cx, y + h - 22, w * 0.9f, new Color(255, 220, 90), 210);
                 g.setColor(PAL.get('N')); g.fillRect(cx - 9, y + h - 12, 18, 6);
@@ -1229,21 +1297,6 @@ public class GoblinDoorsGUI extends JPanel {
                 g.setColor(new Color(255, 240, 90, 200));
                 if ((frame / 14) % 5 != 0) { g.fillRect(cx - 7, y + h - 28 + (frame / 6 % 2), 2, 2); g.fillRect(cx + 3, y + h - 28 + (frame / 6 % 2), 2, 2); }
                 break;
-            default: {
-                // collapsed tunnel: a heap of irregular boulders
-                Random br = new Random(i * 13L + 5);
-                g.setColor(new Color(40, 36, 52));
-                g.fillRect(x, y + (int) (h * 0.30), w, h);
-                for (int k = 0; k < 26; k++) {
-                    int bw = 6 + br.nextInt(9), bh = 5 + br.nextInt(7);
-                    int bx = x - 2 + br.nextInt(w + 4 - bw / 2);
-                    int by = y + (int) (h * 0.34) + br.nextInt((int) (h * 0.66) - bh);
-                    int v = 62 + br.nextInt(40);
-                    g.setColor(new Color(v, v - 3, v + 12)); g.fillOval(bx, by, bw, bh);
-                    g.setColor(new Color(v + 22, v + 18, v + 32)); g.fillRect(bx + 2, by + 1, Math.max(1, bw / 3), 1);
-                }
-                break;
-            }
         }
     }
 
@@ -1294,13 +1347,6 @@ public class GoblinDoorsGUI extends JPanel {
             g.drawLine(x + w / 4, y + h / 2, x + 3 * w / 4, y + h - 8);
             g.drawLine(x + 3 * w / 4, y + h / 2, x + w / 4, y + h - 8);
             g.setStroke(new BasicStroke(1));
-        } else if (blocked[i] == 2) {          // dead end: rubble pile
-            for (int k = 0; k < 14; k++) {
-                int v = 80 + (k * 17) % 50;
-                g.setColor(new Color(v, v - 2, v + 12));
-                int rw = 6 + (k * 3) % 5;
-                g.fillOval(x + 1 + (k * 5) % Math.max(1, w - 9), y + h - 9 - (k * 7) % 18, rw, 5 + k % 3);
-            }
         } else if (blocked[i] == 3) {          // sealed off by the map
             g.setColor(new Color(0, 0, 0, 150)); g.fill(caveShape(x, y, w, h, 0, seed));
             sprite(g, ICONS[1], x + w / 2 - 8, y + h / 2 - 8, 2, null, null, false);
@@ -1322,6 +1368,19 @@ public class GoblinDoorsGUI extends JPanel {
             boolean hov = mode == Mode.DOOR && open[i] && doorRect(i).contains(mouse);
             drawEntrance(g, i, hov);
         }
+    }
+
+    void drawStartledGoblinInDoor(Graphics2D g) {
+        if (itemShow < 0 || itemDoor < 0 || itemDoor >= nDoors
+            || goblinStartled.getIconWidth() <= 0 || goblinStartled.getIconHeight() <= 0) return;
+        int x = dx(itemDoor), y = dy(), w = dw(), h = dh();
+        int iconW = w - 4;
+        int iconH = iconW * goblinStartled.getIconHeight() / goblinStartled.getIconWidth();
+        Shape oldClip = g.getClip();
+        g.clip(caveShape(x, y, w, h, 0, 31 + itemDoor * 17 + nDoors));
+        g.drawImage(goblinStartled.getImage(), x + (w - iconW) / 2,
+            y + (h - iconH) / 2, iconW, iconH, null);
+        g.setClip(oldClip);
     }
 
     // ---------- Gameplay scenes ----------
@@ -1380,6 +1439,7 @@ public class GoblinDoorsGUI extends JPanel {
                 if (itemShow >= 0) {
                     int bob = (int) (Math.sin(frame * 0.12) * 3);
                     g.setColor(new Color(0, 0, 0, 120)); g.fillRect(0, 0, W, SH);
+                    drawStartledGoblinInDoor(g);
                     glow(g, 160, 72, 70, new Color(255, 220, 100), 190);
                     drawItemIcon(g, itemShow, 160 - 24, 48 + bob, 6, null);
                 }
@@ -1404,7 +1464,7 @@ public class GoblinDoorsGUI extends JPanel {
                     g.drawLine(160, 80, 160 + (int) (Math.cos(a) * 200), 80 + (int) (Math.sin(a) * 200));
                 }
                 glow(g, 160, 80, 100, new Color(255, 230, 150), 150 + (int) (Math.sin(frame * 0.1) * 30));
-                drawMage(g, 128, 62, 4);
+                drawHolyWizard(g, 128, 62, 4);
                 drawMage(g, 232, 106, 2);
                 glow(g, 248, 120, 24, new Color(180, 160, 255), 60);
                 g.setColor(new Color(60, 50, 90)); g.fillRect(0, 148, W, 12);
@@ -1471,11 +1531,31 @@ public class GoblinDoorsGUI extends JPanel {
         g.fillRect(0, 0, getWidth(), getHeight());
     }
 
+    void paintControllerCursor(Graphics2D g) {
+        if (!controllerCursorVisible || mouse.x < 0 || mouse.y < 0) return;
+        Graphics2D cursor = (Graphics2D) g.create();
+        cursor.translate(offX, offY);
+        cursor.scale(scale, scale);
+        cursor.setColor(new Color(0, 0, 0, 190));
+        cursor.fillOval(mouse.x - 10, mouse.y - 10, 22, 22);
+        cursor.setColor(new Color(255, 241, 168));
+        cursor.setStroke(new BasicStroke(2));
+        cursor.drawOval(mouse.x - 10, mouse.y - 10, 22, 22);
+        cursor.drawLine(mouse.x - 14, mouse.y, mouse.x + 14, mouse.y);
+        cursor.drawLine(mouse.x, mouse.y - 14, mouse.x, mouse.y + 14);
+        cursor.dispose();
+    }
+
     @Override protected void paintComponent(Graphics g0) {
         super.paintComponent(g0);
         Graphics2D g = (Graphics2D) g0.create();
         computeScale();
-        if (mode == Mode.MENU) { paintMenu(g); g.dispose(); return; }
+        if (mode == Mode.MENU) {
+            paintMenu(g);
+            paintControllerCursor(g);
+            g.dispose();
+            return;
+        }
 
         Graphics2D gb = buf.createGraphics();
         drawScene(gb);
@@ -1503,6 +1583,7 @@ public class GoblinDoorsGUI extends JPanel {
         if (canPause()) drawPauseButton(g);
         if (paused) drawPauseMenu(g);
         if (mode == Mode.LOADING) paintLoadingScreen(g);
+        paintControllerCursor(g);
         g.dispose();
     }
 
@@ -2213,6 +2294,7 @@ public class GoblinDoorsGUI extends JPanel {
                 {"Click a cave / 1-5", "Choose a cave entrance"},
                 {"P  M  G  C", "Use Potion, Map, Grimoire, Charm"},
                 {"Click item bar", "Use that item (when choosing)"},
+                {"XInput: stick/D-pad, A/B", "Move/select/back; Start pauses"},
                 {"F11 / Alt+Enter", "Toggle fullscreen"},
                 {"Esc", "Pause / resume; close menu panels"}
             };

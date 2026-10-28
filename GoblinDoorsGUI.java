@@ -29,6 +29,7 @@ public class GoblinDoorsGUI extends JPanel {
     // ---------- Sizes ----------
     static final int W = 320, H = 240, SH = 160, S = 3;     // logical canvas, scene height, scale
     static final int PW = W * S, PH = H * S;
+    static final int BLACK_OPENING_SCENE = -1;
     static final String WINDOW_ICON_PATH = "icons/favicon.png";
     static final int HP_MAX = 30, SNAKE_DMG = 10, MAXN = 5;
     static final int LOADING_FADE_MS = 350, LOADING_HOLD_MS = 2650;
@@ -141,6 +142,34 @@ public class GoblinDoorsGUI extends JPanel {
                 g.fillRect(x + cx * sc, y + r * sc, sc, sc);
             }
         }
+    }
+
+    void drawVisualCue(Graphics2D g) {
+        if (visualCue == null) return;
+        long elapsed = System.currentTimeMillis() - visualCueStartedAt;
+        final long duration = 1500;
+        if (elapsed >= duration) {
+            visualCue = null;
+            enteredDoor = -1;
+            return;
+        }
+
+        float progress = elapsed / (float) duration;
+        float alpha = Math.min(1f, Math.min(progress * 5f, (1f - progress) * 4f));
+        int width = Math.min(700, g.getFontMetrics(pixelFont(Font.BOLD, 34)).stringWidth(visualCue) + 72);
+        int height = 68;
+        int x = (PW - width) / 2;
+        int y = 205 + Math.round((1f - alpha) * -12);
+
+        Composite oldComposite = g.getComposite();
+        g.setComposite(AlphaComposite.SrcOver.derive(Math.max(0f, alpha)));
+        g.setColor(new Color(10, 8, 24, 225));
+        g.fillRect(x, y, width, height);
+        g.setColor(new Color(255, 241, 168));
+        drawPixelBorder(g, new Rectangle(x, y, width, height), 3);
+        g.setFont(pixelFont(Font.BOLD, 34));
+        centerText(g, visualCue, PW / 2, y + 45);
+        g.setComposite(oldComposite);
     }
 
     static Image loadWindowIcon() {
@@ -279,6 +308,9 @@ public class GoblinDoorsGUI extends JPanel {
     // ---------- Visual state ----------
     int frame;
     double flash, hurt, shake;
+    String visualCue;
+    long visualCueStartedAt;
+    int enteredDoor = -1;
     Point mouse = new Point(-1, -1);
     final BufferedImage buf = new BufferedImage(W, H, BufferedImage.TYPE_INT_ARGB);
     BufferedImage bgCave;
@@ -399,6 +431,11 @@ public class GoblinDoorsGUI extends JPanel {
         if (logs.size() > 5) logs.remove(0);
     }
 
+    void showVisualCue(String text) {
+        visualCue = text;
+        visualCueStartedAt = System.currentTimeMillis();
+    }
+
     void insert(Step... steps) { for (int i = steps.length - 1; i >= 0; i--) queue.addFirst(steps[i]); }
     void insert(List<Step> l) { insert(l.toArray(new Step[0])); }
 
@@ -463,6 +500,7 @@ public class GoblinDoorsGUI extends JPanel {
         Arrays.fill(types, PathType.SNAKE);
         resetCaves();
         flash = hurt = shake = 0;
+        visualCue = null; visualCueStartedAt = 0; enteredDoor = -1;
         cur = ""; reveal = 0; yesNoCb = null; doorCb = null; blocking = false;
         paused = false; confirmingExit = false; confirmingMainMenu = false;
         confirmingMenuExit = false; pauseSettings = false; pauseStartedAt = 0;
@@ -526,10 +564,12 @@ public class GoblinDoorsGUI extends JPanel {
             act(() -> inventory.addAll(Arrays.asList(ITEMS[0], ITEMS[1], ITEMS[2], ITEMS[3], SEAL))),
             sys("Mana Potion"), sys("Map of the Village"), sys("Grimoire"), sys("Old Charm"), sys("Curse's Seal"),
             say("He rests... until his eyes grow heavy."),
-            act(() -> { sleeping = true; setOpeningScene(0); }),
+            act(() -> { sleeping = true; setOpeningScene(BLACK_OPENING_SCENE); }),
             say("*Rustle.*"),
             act(() -> { sleeping = false; inventory.clear(); flash = 0.6; shake = 6; }),
+            act(() -> setOpeningScene(4)),
             say("His eyes snap open. His belongings are gone!"),
+            act(() -> setOpeningScene(5)),
             say("Luckily, the thief was careless. Small footprints lead deeper into the cave."),
             act(() -> scene = Scene.TUNNEL),
             say("The deeper he goes, the darker it becomes."),
@@ -557,6 +597,8 @@ public class GoblinDoorsGUI extends JPanel {
 
     void startRound(int r) {
         roundNo = r; spells = 2; maxSpells = 2;
+        enteredDoor = -1;
+        showVisualCue(r == 5 ? "FINAL ROUND" : "ROUND " + r);
         nDoors = r <= 2 ? 3 : 5;
         List<PathType> t = new ArrayList<>();
         t.add(PathType.ITEM);
@@ -611,7 +653,11 @@ public class GoblinDoorsGUI extends JPanel {
             final int r = roundNo;
             List<Step> L = new ArrayList<>();
             L.add(say("He walks into cave " + roman(p) + "..."));
-            L.add(act(() -> doorOpen[p] = true));
+            L.add(act(() -> {
+                doorOpen[p] = true;
+                enteredDoor = p;
+                showVisualCue("ENTERING CAVE " + roman(p));
+            }));
             switch (types[p]) {
                 case ITEM: {
                     if (practice) {
@@ -810,6 +856,7 @@ public class GoblinDoorsGUI extends JPanel {
         } else {
             long pausedFor = System.currentTimeMillis() - pauseStartedAt;
             if (autoAt > 0) autoAt += pausedFor;
+            if (visualCue != null) visualCueStartedAt += pausedFor;
             audio.resumeNarration();
             audio.pauseCaveAmbience(false);
             confirmingExit = false;
@@ -977,7 +1024,9 @@ public class GoblinDoorsGUI extends JPanel {
         storyScenes = new ImageIcon[] {
             GameAssets.loadImage("scenes/scene1.gif"),
             GameAssets.loadImage("scenes/scene2.gif"),
-            GameAssets.loadImage("scenes/scene3.gif")
+            GameAssets.loadImage("scenes/scene3.gif"),
+            GameAssets.loadImage("scenes/scene4.gif"),
+            GameAssets.loadImage("scenes/scene5.gif")
         };
         wizardCharacter = GameAssets.loadImage("images/wizard_cs.gif");
         holyWizard = GameAssets.loadImage("images/holyWizard.gif");
@@ -1427,7 +1476,14 @@ public class GoblinDoorsGUI extends JPanel {
             g.drawLine(x + w / 2 + 9, y + h / 2 - 9, x + w / 2 - 9, y + h / 2 + 9);
             g.setStroke(new BasicStroke(1));
         }
-        if (hovered) {
+        if (enteredDoor == i && visualCue != null
+            && visualCue.startsWith("ENTERING CAVE")) {
+            float pulse = (float) (0.65 + 0.35 * Math.sin(frame * 0.35));
+            g.setColor(new Color(255, 241, 168, Math.round(255 * pulse)));
+            g.setStroke(new BasicStroke(3));
+            g.draw(caveShape(x, y, w, h, 0, seed));
+            g.setStroke(new BasicStroke(1));
+        } else if (hovered) {
             g.setColor(new Color(255, 241, 168));
             g.setStroke(new BasicStroke(2));
             g.draw(caveShape(x, y, w, h, 0, seed));
@@ -1463,6 +1519,11 @@ public class GoblinDoorsGUI extends JPanel {
         switch (scene) {
             case TITLE: break;
             case CAMP: {
+                if (openingScene == BLACK_OPENING_SCENE) {
+                    g.setColor(Color.BLACK);
+                    g.fillRect(0, 0, W, SH);
+                    break;
+                }
                 if (openingScene > 0 && openingScene <= storyScenes.length
                     && storyScenes[openingScene - 1] != null) {
                     g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
@@ -1650,6 +1711,7 @@ public class GoblinDoorsGUI extends JPanel {
         g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
         drawDoorNumerals(g); drawHud(g); drawLog(g); drawDialogue(g);
+        drawVisualCue(g);
         if (mode == Mode.END) drawEndScreen(g);
         if (mode == Mode.OVER) drawOverScreen(g);
         if (canPause()) drawPauseButton(g);

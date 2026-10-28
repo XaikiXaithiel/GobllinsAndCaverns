@@ -422,7 +422,9 @@ final class GameAudio {
             return;
         }
         lightSpellRequested = false;
-        startDialogueBoop(clip);
+        if (clip.isRunning()) return;
+        clip.setFramePosition(0);
+        clip.start();
     }
 
     private void startDialogueBoop(Clip clip) {

@@ -281,12 +281,13 @@ public class GoblinDoorsGUI extends JPanel {
     BufferedImage bgCave;
     BufferedImage dialogueIndicator;
     ImageIcon menuBackground;
+    ImageIcon menuBanner;
     ImageIcon[] storyScenes;
     ImageIcon wizardCharacter;
     ImageIcon holyWizard;
     ImageIcon goblinStartled;
     ImageIcon potionIcon;
-    ImageIcon dialogueBox, heartFilled, heartEmpty;
+    ImageIcon heartFilled, heartEmpty;
     Image menuPlay, menuHelp, menuInfo, menuSettings;
     int openingScene;
     final Font fText = pixelFont(Font.BOLD, 22);
@@ -301,16 +302,17 @@ public class GoblinDoorsGUI extends JPanel {
     final Rectangle pauseExitRect = new Rectangle(340, 458, 280, 64);
 
     // ---------- Main menu (all coordinates are in the 960x720 virtual canvas) ----------
-    final Rectangle tutorialRect = new Rectangle(174, 450, 196, 66);
-    final Rectangle practiceRect = new Rectangle(382, 450, 196, 66);
-    final Rectangle exitRect     = new Rectangle(590, 450, 196, 66);
+    static final int MENU_CENTER_X = PW / 2;
+    final Rectangle tutorialRect = new Rectangle(MENU_CENTER_X - 306, 485, 196, 66);
+    final Rectangle practiceRect = new Rectangle(MENU_CENTER_X - 98, 485, 196, 66);
+    final Rectangle exitRect     = new Rectangle(MENU_CENTER_X + 110, 485, 196, 66);
     final Rectangle fsRect       = new Rectangle(520, 245, 170, 50);   // settings: fullscreen toggle
     final Rectangle muteRect     = new Rectangle(520, 315, 170, 50);   // settings: mute toggle
     final Rectangle volumeSliderRect = new Rectangle(520, 410, 170, 28);
-    final Rectangle menuPlayRect = new Rectangle(380, 210, 200, 250);
-    final Rectangle menuHelpRect = new Rectangle(368, 550, 62, 62);
-    final Rectangle menuInfoRect = new Rectangle(449, 550, 62, 62);
-    final Rectangle menuSettingsRect = new Rectangle(530, 550, 62, 62);
+    final Rectangle menuPlayRect = new Rectangle(MENU_CENTER_X - 100, 210, 200, 250);
+    final Rectangle menuHelpRect = new Rectangle(371, 588, 56, 56);
+    final Rectangle menuInfoRect = new Rectangle(452, 588, 56, 56);
+    final Rectangle menuSettingsRect = new Rectangle(533, 588, 56, 56);
     final Rectangle backRect     = new Rectangle(380, 480, 200, 52);   // settings: back
     final Rectangle panelRect    = new Rectangle(110, 110, 740, 500);  // tutorial / help / info panel
     final Rectangle closeRect    = new Rectangle(390, 548, 180, 50);
@@ -777,6 +779,7 @@ public class GoblinDoorsGUI extends JPanel {
                 }
                 break;
             case AUTO: autoAt = 0; break;
+            case DOOR: reveal = cur.length(); break;
             case END: case OVER: restart(); break;
             default: break;
         }
@@ -830,7 +833,12 @@ public class GoblinDoorsGUI extends JPanel {
 
     Rectangle doorRect(int i) { return new Rectangle(dx(i) * S, dy() * S, dw() * S, dh() * S); }
 
-    void pick(int i) { if (mode == Mode.DOOR && i < nDoors && open[i]) answerDoor(i); }
+    void pick(int i) {
+        if (mode != Mode.DOOR || i >= nDoors || !open[i]) return;
+        if ("light".equals(doorPurpose)) audio.playLightSpell();
+        else audio.playButtonBoop();
+        answerDoor(i);
+    }
 
     boolean tryItemClick(Point p) {
         if (!canUseItems()) return false;
@@ -872,16 +880,19 @@ public class GoblinDoorsGUI extends JPanel {
                     answerYesNo(false);
                 }
                 break;
-            case DOOR:
+            case DOOR: {
                 if (tryItemClick(p)) break;
+                boolean pickedDoor = false;
                 for (int i = 0; i < nDoors; i++) {
                     if (open[i] && doorRect(i).contains(p)) {
-                        audio.playButtonBoop();
                         pick(i);
+                        pickedDoor = true;
                         break;
                     }
                 }
+                if (!pickedDoor) advance();
                 break;
+            }
             case END: case OVER:
                 if (againRect.contains(p)) {
                     audio.playButtonBoop();
@@ -924,7 +935,8 @@ public class GoblinDoorsGUI extends JPanel {
         setPreferredSize(new Dimension(PW, PH));
         setFocusable(true);
         controller = XInputController.connect();
-        menuBackground = GameAssets.loadImage("images/download.gif");
+        menuBackground = GameAssets.loadImage("images/bgMenu.jpg");
+        menuBanner = GameAssets.loadImage("images/bannerMenu.png");
         storyScenes = new ImageIcon[] {
             GameAssets.loadImage("scenes/scene1.gif"),
             GameAssets.loadImage("scenes/scene2.gif"),
@@ -934,13 +946,12 @@ public class GoblinDoorsGUI extends JPanel {
         holyWizard = GameAssets.loadImage("images/holyWizard.gif");
         goblinStartled = GameAssets.loadImage("images/goblinStartled.gif");
         potionIcon = GameAssets.loadImage("icons/potion.png");
-        dialogueBox = GameAssets.loadImage("images/dialogueBox.png");
         heartFilled = GameAssets.loadImage("icons/heart_filled.png");
         heartEmpty = GameAssets.loadImage("icons/heart_empty.png");
         dialogueIndicator = tintDialogueIndicator(GameAssets.loadImage("images/dialogueIndicator.png"));
         menuPlay = GameAssets.loadImage("images/play.png").getImage();
-        menuHelp = GameAssets.loadImage("images/help.png").getImage();
-        menuInfo = GameAssets.loadImage("images/i.png").getImage();
+        menuHelp = GameAssets.loadImage("images/controls.png").getImage();
+        menuInfo = GameAssets.loadImage("images/about.png").getImage();
         menuSettings = GameAssets.loadImage("images/settings.png").getImage();
         bgCave = makeCaveBg(SH, 98);
         resetRun();
@@ -1592,9 +1603,7 @@ public class GoblinDoorsGUI extends JPanel {
         g.setColor(hover ? new Color(255, 241, 168) : new Color(40, 34, 80));
         g.fillRect(pauseRect.x, pauseRect.y, pauseRect.width, pauseRect.height);
         g.setColor(new Color(255, 241, 168));
-        g.setStroke(new BasicStroke(3));
-        g.drawRect(pauseRect.x, pauseRect.y, pauseRect.width, pauseRect.height);
-        g.setStroke(new BasicStroke(1));
+        drawPixelBorder(g, pauseRect, 3);
         g.setColor(hover ? new Color(40, 30, 10) : Color.WHITE);
         g.fillRect(pauseRect.x + 12, pauseRect.y + 11, 6, 22);
         g.fillRect(pauseRect.x + 26, pauseRect.y + 11, 6, 22);
@@ -1606,9 +1615,7 @@ public class GoblinDoorsGUI extends JPanel {
         g.setColor(new Color(16, 14, 34));
         g.fillRect(290, 190, 380, 390);
         g.setColor(new Color(255, 241, 168));
-        g.setStroke(new BasicStroke(3));
-        g.drawRect(290, 190, 380, 390);
-        g.setStroke(new BasicStroke(1));
+        drawPixelBorder(g, new Rectangle(290, 190, 380, 390), 3);
         g.setFont(pixelFont(Font.BOLD, 42));
         g.setColor(new Color(255, 241, 168));
         if (confirmingExit) {
@@ -1695,10 +1702,9 @@ public class GoblinDoorsGUI extends JPanel {
             g.setColor(new Color(0, 0, 0, 160)); g.fillRect(r.x, r.y, r.width, r.height);
             if (ready) {
                 int a = 150 + (int) (Math.sin(frame * 0.2) * 90);
-                g.setColor(new Color(255, 241, 168, Math.max(0, Math.min(255, a)))); g.setStroke(new BasicStroke(3));
+                g.setColor(new Color(255, 241, 168, Math.max(0, Math.min(255, a))));
             } else g.setColor(new Color(255, 241, 168, 160));
-            g.drawRect(r.x, r.y, r.width, r.height);
-            g.setStroke(new BasicStroke(1));
+            drawPixelBorder(g, r, ready ? 3 : 1);
             Color mono = !have ? new Color(50, 50, 70) : spent ? new Color(80, 80, 100) : null;
             drawItemIcon(g, i, r.x + 6, 16, 4, mono);
             if (spent) { g.setColor(new Color(200, 60, 60, 200)); g.drawLine(r.x + 6, r.y + 6, r.x + 38, r.y + 38); }
@@ -1724,7 +1730,8 @@ public class GoblinDoorsGUI extends JPanel {
         int bw = Math.max(fm.stringWidth(name), Math.max(fm.stringWidth(desc), fm.stringWidth(status))) + 28;
         int bx = PW - 20 - bw, by = 62, bh = 92;
         g.setColor(new Color(10, 8, 24, 240)); g.fillRect(bx, by, bw, bh);
-        g.setColor(new Color(255, 241, 168)); g.drawRect(bx, by, bw, bh);
+        g.setColor(new Color(255, 241, 168));
+        drawPixelBorder(g, new Rectangle(bx, by, bw, bh), 1);
         g.setColor(new Color(255, 241, 168)); g.drawString(name, bx + 14, by + 26);
         g.setColor(new Color(235, 230, 215)); g.drawString(desc, bx + 14, by + 52);
         g.setColor(new Color(150, 230, 255)); g.drawString(status, bx + 14, by + 78);
@@ -1786,23 +1793,33 @@ public class GoblinDoorsGUI extends JPanel {
         boolean hov = r.contains(mouse);
         g.setColor(hov ? new Color(255, 241, 168) : new Color(70, 60, 110));
         g.fillRect(r.x, r.y, r.width, r.height);
-        g.setColor(new Color(255, 241, 168)); g.drawRect(r.x, r.y, r.width, r.height);
+        g.setColor(new Color(255, 241, 168));
+        drawPixelBorder(g, r, 3);
         g.setFont(fText);
         g.setColor(hov ? new Color(40, 30, 10) : Color.WHITE);
         centerText(g, label + (key.isEmpty() ? "" : "  (" + key + ")"), r.x + r.width / 2, r.y + r.height / 2 + 8);
     }
 
+    void drawPixelBorder(Graphics2D g, Rectangle bounds, int thickness) {
+        int gap = Math.min(7, Math.min(bounds.width, bounds.height) / 4);
+        int horizontalWidth = bounds.width - gap * 2;
+        int verticalHeight = bounds.height - gap * 2;
+        if (horizontalWidth <= 0 || verticalHeight <= 0) return;
+        g.fillRect(bounds.x + gap, bounds.y, horizontalWidth, thickness);
+        g.fillRect(bounds.x + gap, bounds.y + bounds.height - thickness, horizontalWidth, thickness);
+        g.fillRect(bounds.x, bounds.y + gap, thickness, verticalHeight);
+        g.fillRect(bounds.x + bounds.width - thickness, bounds.y + gap, thickness, verticalHeight);
+    }
+
     void drawDialogue(Graphics2D g) {
         int bx = 30, by = 500, bw = 900, bh = 200;
         Color border = curSys ? new Color(90, 200, 255) : new Color(255, 241, 168);
-        if (dialogueBox != null && dialogueBox.getIconWidth() > 0 && dialogueBox.getIconHeight() > 0) {
-            g.drawImage(dialogueBox.getImage(), bx, by, bw, bh, null);
-        } else {
-            g.setColor(new Color(14, 12, 32, 238)); g.fillRoundRect(bx, by, bw, bh, 16, 16);
-            g.setColor(border); g.setStroke(new BasicStroke(3)); g.drawRoundRect(bx, by, bw, bh, 16, 16);
-            g.setStroke(new BasicStroke(1));
-            g.setColor(border.darker()); g.drawRoundRect(bx + 6, by + 6, bw - 12, bh - 12, 10, 10);
-        }
+        g.setColor(new Color(14, 11, 30, 238));
+        g.fillRect(bx, by, bw, bh);
+        g.setColor(border);
+        drawPixelBorder(g, new Rectangle(bx, by, bw, bh), 3);
+        g.setColor(border.darker());
+        drawPixelBorder(g, new Rectangle(bx + 6, by + 6, bw - 12, bh - 12), 1);
 
         g.setFont(fText);
         FontMetrics fm = g.getFontMetrics();
@@ -2100,6 +2117,17 @@ public class GoblinDoorsGUI extends JPanel {
         return 0;
     }
 
+    void drawMenuIcon(Graphics2D g, Image image, Rectangle bounds, boolean hovered) {
+        int sourceWidth = image.getWidth(this), sourceHeight = image.getHeight(this);
+        if (sourceWidth <= 0 || sourceHeight <= 0) return;
+        double iconScale = Math.min(bounds.width / (double) sourceWidth,
+            bounds.height / (double) sourceHeight) * (hovered ? 1.08 : 1.0);
+        int iconWidth = (int) Math.round(sourceWidth * iconScale);
+        int iconHeight = (int) Math.round(sourceHeight * iconScale);
+        g.drawImage(image, bounds.x + (bounds.width - iconWidth) / 2,
+            bounds.y + (bounds.height - iconHeight) / 2, iconWidth, iconHeight, null);
+    }
+
     void menuClick(Point p) {
         switch (menuHit(p)) {
             case 1: launch(); break;
@@ -2126,17 +2154,16 @@ public class GoblinDoorsGUI extends JPanel {
         if (enabled) {
             g.setColor(hover ? new Color(255, 241, 168) : new Color(40, 34, 80));
             g.fillRect(r.x, r.y, r.width, r.height);
-            g.setColor(new Color(255, 241, 168)); g.setStroke(new BasicStroke(3));
-            g.drawRect(r.x, r.y, r.width, r.height);
+            g.setColor(new Color(255, 241, 168));
+            drawPixelBorder(g, r, 3);
             g.setColor(hover ? new Color(40, 30, 10) : Color.WHITE);
         } else {
             g.setColor(new Color(30, 28, 52));
             g.fillRect(r.x, r.y, r.width, r.height);
-            g.setColor(new Color(78, 74, 108)); g.setStroke(new BasicStroke(2));
-            g.drawRect(r.x, r.y, r.width, r.height);
+            g.setColor(new Color(78, 74, 108));
+            drawPixelBorder(g, r, 2);
             g.setColor(new Color(125, 122, 150));
         }
-        g.setStroke(new BasicStroke(1));
         g.setFont(pixelFont(Font.BOLD, 30));
         centerText(g, label, r.x + r.width / 2, r.y + r.height / 2 + 10);
     }
@@ -2184,8 +2211,22 @@ public class GoblinDoorsGUI extends JPanel {
         g.translate(offX, offY); g.scale(scale, scale);
 
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-        if (menuBackground != null) menuBackground.paintIcon(this, g, 0, 0);
+        if (menuBackground != null && menuBackground.getIconWidth() > 0 && menuBackground.getIconHeight() > 0) {
+            double bgScale = Math.max(PW / (double) menuBackground.getIconWidth(),
+                PH / (double) menuBackground.getIconHeight());
+            int bgWidth = (int) Math.ceil(menuBackground.getIconWidth() * bgScale);
+            int bgHeight = (int) Math.ceil(menuBackground.getIconHeight() * bgScale);
+            g.drawImage(menuBackground.getImage(), (PW - bgWidth) / 2, (PH - bgHeight) / 2,
+                bgWidth, bgHeight, null);
+        }
         g.setColor(new Color(0, 0, 0, 55)); g.fillRect(0, 0, PW, PH);
+
+        if (menuBanner.getIconWidth() > 0 && menuBanner.getIconHeight() > 0) {
+            int bannerWidth = 600;
+            int bannerHeight = bannerWidth * menuBanner.getIconHeight() / menuBanner.getIconWidth();
+            g.drawImage(menuBanner.getImage(), MENU_CENTER_X - bannerWidth / 2, 74,
+                bannerWidth, bannerHeight, null);
+        }
 
         int hit = panel != Panel.NONE ? 0 : menuHit(mouse);
         double playScale = hit == 1 ? 1.08 : 1.0;
@@ -2200,9 +2241,9 @@ public class GoblinDoorsGUI extends JPanel {
         menuButton(g, practiceRect, "Practice", true, hit == 7);
         menuButton(g, exitRect, "Exit", true, hit == 2);
 
-        g.drawImage(menuHelp, menuHelpRect.x, menuHelpRect.y, menuHelpRect.width, menuHelpRect.height, null);
-        g.drawImage(menuInfo, menuInfoRect.x, menuInfoRect.y, menuInfoRect.width, menuInfoRect.height, null);
-        g.drawImage(menuSettings, menuSettingsRect.x, menuSettingsRect.y, menuSettingsRect.width, menuSettingsRect.height, null);
+        drawMenuIcon(g, menuHelp, menuHelpRect, hit == 8);
+        drawMenuIcon(g, menuInfo, menuInfoRect, hit == 9);
+        drawMenuIcon(g, menuSettings, menuSettingsRect, hit == 3);
 
         if (panel != Panel.NONE) {
             g.setTransform(base);
@@ -2217,9 +2258,8 @@ public class GoblinDoorsGUI extends JPanel {
 
     void drawSettingsPanel(Graphics2D g, int ph) {
         g.setColor(new Color(16, 14, 34)); g.fillRect(230, 165, 500, 410);
-        g.setColor(new Color(255, 241, 168)); g.setStroke(new BasicStroke(3));
-        g.drawRect(230, 165, 500, 410);
-        g.setStroke(new BasicStroke(1));
+        g.setColor(new Color(255, 241, 168));
+        drawPixelBorder(g, new Rectangle(230, 165, 500, 410), 3);
         g.setFont(pixelFont(Font.BOLD, 38));
         g.setColor(new Color(255, 241, 168)); centerText(g, "SETTINGS", PW / 2, 220);
         g.setFont(pixelFont(Font.BOLD, 26));
@@ -2253,9 +2293,8 @@ public class GoblinDoorsGUI extends JPanel {
     void drawBigPanel(Graphics2D g, int ph) {
         Rectangle p = panelRect;
         g.setColor(new Color(16, 14, 34)); g.fillRect(p.x, p.y, p.width, p.height);
-        g.setColor(new Color(255, 241, 168)); g.setStroke(new BasicStroke(3));
-        g.drawRect(p.x, p.y, p.width, p.height);
-        g.setStroke(new BasicStroke(1));
+        g.setColor(new Color(255, 241, 168));
+        drawPixelBorder(g, p, 3);
         int tx = p.x + 40, tw = p.width - 80;
         Color gold = new Color(255, 241, 168), light = new Color(235, 230, 215), cyan = new Color(150, 230, 255);
 
@@ -2342,7 +2381,8 @@ public class GoblinDoorsGUI extends JPanel {
             sprite(g, SNAKE, PW / 2 - 200, cy - 30, 6, null, null, false);
             g.setColor(new Color(30, 30, 50)); g.fillRect(PW / 2 - 30, cy - 12, 240, 28);
             g.setColor(new Color(70, 190, 90)); g.fillRect(PW / 2 - 30, cy - 12, 160, 28);
-            g.setColor(Color.WHITE); g.drawRect(PW / 2 - 30, cy - 12, 240, 28);
+            g.setColor(Color.WHITE);
+            drawPixelBorder(g, new Rectangle(PW / 2 - 30, cy - 12, 240, 28), 1);
             g.setFont(pixelFont(Font.BOLD, 18));
             centerText(g, "-10 HP per snake", PW / 2 + 90, cy + 42);
         }

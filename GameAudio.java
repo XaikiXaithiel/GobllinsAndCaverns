@@ -12,6 +12,8 @@ final class GameAudio {
     private volatile boolean dialogueBoopRequested;
     private volatile Clip buttonBoopClip;
     private volatile boolean buttonBoopRequested;
+    private volatile Clip lightSpellClip;
+    private volatile boolean lightSpellRequested;
     private volatile Clip homeMusicClip;
     private SourceDataLine caveAmbienceLine;
     private Thread caveAmbienceThread;
@@ -30,6 +32,7 @@ final class GameAudio {
         this.errorLogger = errorLogger;
         loadDialogueBoopAsync();
         loadButtonBoopAsync();
+        loadLightSpellAsync();
     }
 
     void playNarration(String path) {
@@ -292,6 +295,7 @@ final class GameAudio {
         if (narrationLine != null && narrationLine.isOpen()) applyMute(narrationLine);
         if (dialogueBoopClip != null && dialogueBoopClip.isOpen()) applyMute(dialogueBoopClip);
         if (buttonBoopClip != null && buttonBoopClip.isOpen()) applyMute(buttonBoopClip);
+        if (lightSpellClip != null && lightSpellClip.isOpen()) applyMute(lightSpellClip);
         if (homeMusicClip != null && homeMusicClip.isOpen()) applyMute(homeMusicClip);
         if (caveAmbienceLine != null && caveAmbienceLine.isOpen()) applyMute(caveAmbienceLine);
     }
@@ -356,6 +360,40 @@ final class GameAudio {
         loader.start();
     }
 
+    private void loadLightSpellAsync() {
+        Thread loader = new Thread(() -> {
+            File file = GameAssets.resolveFile("audio/LightSpell.wav");
+            if (file == null) {
+                errorLogger.accept("Light spell sound file not found. Working directory: "
+                    + System.getProperty("user.dir") + "; looking for: audio/LightSpell.wav");
+                return;
+            }
+            try (AudioInputStream source = AudioSystem.getAudioInputStream(file)) {
+                AudioFormat format = source.getFormat();
+                AudioFormat playbackFormat = new AudioFormat(AudioFormat.Encoding.PCM_SIGNED,
+                    format.getSampleRate(), 16, format.getChannels(),
+                    format.getChannels() * 2, format.getSampleRate(), false);
+                try (AudioInputStream stream = AudioSystem.getAudioInputStream(playbackFormat, source)) {
+                    Clip clip = AudioSystem.getClip();
+                    clip.open(stream);
+                    setClipGain(clip, 0.75f, "light spell sound");
+                    synchronized (this) {
+                        lightSpellClip = clip;
+                        applyMute(clip);
+                        if (lightSpellRequested && !muted) {
+                            lightSpellRequested = false;
+                            startDialogueBoop(clip);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                errorLogger.accept("Could not load light spell sound: " + file + " - " + e.getMessage());
+            }
+        }, "light-spell-sound-loader");
+        loader.setDaemon(true);
+        loader.start();
+    }
+
     synchronized void playDialogueBoop() {
         Clip clip = dialogueBoopClip;
         if (clip == null || !clip.isOpen()) {
@@ -373,6 +411,17 @@ final class GameAudio {
             return;
         }
         buttonBoopRequested = false;
+        startDialogueBoop(clip);
+    }
+
+    synchronized void playLightSpell() {
+        if (muted) return;
+        Clip clip = lightSpellClip;
+        if (clip == null || !clip.isOpen()) {
+            lightSpellRequested = true;
+            return;
+        }
+        lightSpellRequested = false;
         startDialogueBoop(clip);
     }
 

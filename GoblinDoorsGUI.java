@@ -289,6 +289,7 @@ public class GoblinDoorsGUI extends JPanel {
     // ---------- Visual state ----------
     int frame;
     double flash, hurt, shake;
+    long castingHandUntil;
     String visualCue;
     long visualCueStartedAt;
     int enteredDoor = -1;
@@ -297,6 +298,7 @@ public class GoblinDoorsGUI extends JPanel {
     BufferedImage bgCave;
     BufferedImage dialogueIndicator;
     ImageIcon menuBackground;
+    ImageIcon doorsBackground;
     ImageIcon menuBanner;
     ImageIcon[] storyScenes;
     ImageIcon wizardCharacter;
@@ -306,6 +308,8 @@ public class GoblinDoorsGUI extends JPanel {
     ImageIcon snakeCharacter;
     ImageIcon doorOne;
     ImageIcon doorOneHighlighted;
+    ImageIcon idleHand;
+    ImageIcon castingHand;
     ImageIcon potionIcon;
     ImageIcon heartFilled, heartEmpty;
     Image menuPlay, menuHelp, menuInfo, menuSettings;
@@ -508,6 +512,7 @@ public class GoblinDoorsGUI extends JPanel {
         resetCaves();
         flash = hurt = shake = 0;
         visualCue = null; visualCueStartedAt = 0; enteredDoor = -1;
+        castingHandUntil = 0;
         cur = ""; reveal = 0; yesNoCb = null; doorCb = null; blocking = false;
         paused = false; confirmingExit = false; confirmingMainMenu = false;
         confirmingMenuExit = false; pauseSettings = false; pauseStartedAt = 0;
@@ -578,7 +583,7 @@ public class GoblinDoorsGUI extends JPanel {
             say("His eyes snap open. His belongings are gone!"),
             act(() -> setOpeningScene(5)),
             say("Luckily, the thief was careless. Small footprints lead deeper into the cave."),
-            act(() -> scene = Scene.TUNNEL),
+            act(() -> { scene = Scene.TUNNEL; setOpeningScene(6); }),
             say("The deeper he goes, the darker it becomes."),
             say("He casts \"Lumen\". A faint light appears above his palm."),
             say("\"I can't keep doing this,\" he mutters. \"I have to make every spell count.\""),
@@ -643,7 +648,11 @@ public class GoblinDoorsGUI extends JPanel {
                           : "The darkness fades. Something glints on the floor of cave " + roman(v) + "...")
                 : "The darkness fades. Cave " + roman(v) + " is alive with coiled shapes and a low, hungry hiss...";
             insert(
-                act(() -> { spells--; flash = 0.3; }),
+                act(() -> {
+                    spells--;
+                    flash = 0.3;
+                    castingHandUntil = System.currentTimeMillis() + 1000;
+                }),
                 act(() -> peek[v] = true),
                 sys("Light Spell Used"),
                 sys("Remaining Spells: " + left + "/" + maxSpells),
@@ -1043,13 +1052,15 @@ public class GoblinDoorsGUI extends JPanel {
         setFocusable(true);
         controller = XInputController.connect();
         menuBackground = GameAssets.loadImage("images/bgMenu.gif");
-        menuBanner = GameAssets.loadImage("images/bannerMenu.png");
+        doorsBackground = GameAssets.loadImage("images/gameBG.png");
+        menuBanner = GameAssets.loadImage("icons/bannerMenu.png");
         storyScenes = new ImageIcon[] {
             GameAssets.loadImage("scenes/scene1.gif"),
             GameAssets.loadImage("scenes/scene2.gif"),
             GameAssets.loadImage("scenes/scene3.gif"),
             GameAssets.loadImage("scenes/scene4.gif"),
-            GameAssets.loadImage("scenes/scene5.gif")
+            GameAssets.loadImage("scenes/scene5.gif"),
+            GameAssets.loadImage("scenes/scene6.gif")
         };
         wizardCharacter = GameAssets.loadImage("images/wizard_cs.gif");
         holyWizard = GameAssets.loadImage("images/holyWizard.gif");
@@ -1058,14 +1069,16 @@ public class GoblinDoorsGUI extends JPanel {
         snakeCharacter = GameAssets.loadImage("images/snake.gif");
         doorOne = GameAssets.loadImage("images/doorOne.png");
         doorOneHighlighted = GameAssets.loadImage("images/doorOneHighlighted.png");
+        idleHand = GameAssets.loadImage("images/hand1.png");
+        castingHand = GameAssets.loadImage("images/hand2.png");
         potionIcon = GameAssets.loadImage("icons/potion.png");
         heartFilled = GameAssets.loadImage("icons/heart_filled.png");
         heartEmpty = GameAssets.loadImage("icons/heart_empty.png");
         dialogueIndicator = tintDialogueIndicator(GameAssets.loadImage("images/dialogueIndicator.png"));
-        menuPlay = GameAssets.loadImage("images/play.png").getImage();
-        menuHelp = GameAssets.loadImage("images/controls.png").getImage();
-        menuInfo = GameAssets.loadImage("images/about.png").getImage();
-        menuSettings = GameAssets.loadImage("images/settings.png").getImage();
+        menuPlay = GameAssets.loadImage("icons/play.png").getImage();
+        menuHelp = GameAssets.loadImage("icons/controls.png").getImage();
+        menuInfo = GameAssets.loadImage("icons/about.png").getImage();
+        menuSettings = GameAssets.loadImage("icons/settings.png").getImage();
         bgCave = makeCaveBg(SH, 98);
         resetRun();
         addMouseListener(new MouseAdapter() {
@@ -1609,22 +1622,56 @@ public class GoblinDoorsGUI extends JPanel {
                 break;
             }
             case TUNNEL: {
-                g.drawImage(bgCave, 0, 0, null);
-                g.setColor(new Color(20, 16, 24));
-                for (int k = 0; k < 10; k++) g.fillRect(104 + k * 13, 134 + (k % 2) * 6, 3, 2);
-                drawMage(g, 60, 112, 2);
-                drawFireflies(g);
-                vignette(g, 98, 120, 140, 240, SH);
+                if (openingScene > 0 && openingScene <= storyScenes.length
+                    && storyScenes[openingScene - 1] != null
+                    && storyScenes[openingScene - 1].getIconWidth() > 0
+                    && storyScenes[openingScene - 1].getIconHeight() > 0) {
+                    g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+                    g.drawImage(storyScenes[openingScene - 1].getImage(), 0, 0, W, SH, null);
+                    vignette(g, 160, 125, 175, 120, SH);
+                } else {
+                    g.drawImage(bgCave, 0, 0, null);
+                    g.setColor(new Color(20, 16, 24));
+                    for (int k = 0; k < 10; k++) g.fillRect(104 + k * 13, 134 + (k % 2) * 6, 3, 2);
+                    drawMage(g, 60, 112, 2);
+                    drawFireflies(g);
+                    vignette(g, 98, 120, 140, 240, SH);
+                }
                 break;
             }
             case DOORS: {
-                g.drawImage(bgCave, 0, 0, null);
-                drawCrystal(g, 9, 132, new Color(90, 170, 255));
-                drawCrystal(g, 311, 134, new Color(170, 110, 255));
+                if (doorsBackground.getIconWidth() > 0 && doorsBackground.getIconHeight() > 0) {
+                    int imageWidth = doorsBackground.getIconWidth();
+                    int imageHeight = doorsBackground.getIconHeight();
+                    double targetAspect = (double) W / SH;
+                    int sourceWidth = imageWidth;
+                    int sourceHeight = imageHeight;
+                    if ((double) imageWidth / imageHeight > targetAspect) {
+                        sourceWidth = (int) Math.round(imageHeight * targetAspect);
+                    } else {
+                        sourceHeight = (int) Math.round(imageWidth / targetAspect);
+                    }
+                    int sourceX = (imageWidth - sourceWidth) / 2;
+                    int sourceY = Math.min((imageHeight - sourceHeight) / 2 + 20 * sourceHeight / SH,
+                        imageHeight - sourceHeight);
+                    g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+                    g.drawImage(doorsBackground.getImage(), 0, 0, W, SH,
+                        sourceX, sourceY, sourceX + sourceWidth, sourceY + sourceHeight, null);
+                } else {
+                    g.drawImage(bgCave, 0, 0, null);
+                    drawCrystal(g, 9, 132, new Color(90, 170, 255));
+                    drawCrystal(g, 311, 134, new Color(170, 110, 255));
+                }
                 drawEntrances(g);
-                drawMage(g, 144, 112, 2);
+                ImageIcon hand = System.currentTimeMillis() < castingHandUntil ? castingHand : idleHand;
+                if (hand.getIconWidth() > 0 && hand.getIconHeight() > 0) {
+                    int handHeight = SH + 40;
+                    int handWidth = handHeight * hand.getIconWidth() / hand.getIconHeight();
+                    g.drawImage(hand.getImage(), (W - handWidth) / 2, 20,
+                        handWidth, handHeight, null);
+                }
                 drawFireflies(g);
-                vignette(g, 160, 125, 175, 215, SH);
+                vignette(g, 160, 125, 175, 150, SH);
                 if (itemShow >= 0) {
                     int bob = (int) (Math.sin(frame * 0.12) * 3);
                     g.setColor(new Color(0, 0, 0, 120)); g.fillRect(0, 0, W, SH);

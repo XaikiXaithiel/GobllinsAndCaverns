@@ -170,21 +170,27 @@ public class GoblinDoorsGUI extends JPanel {
         return placeholder;
     }
 
+    ImageIcon itemSpriteForIndex(int index) {
+        if (index < 0 || index >= ITEMS.length) return null;
+        ImageIcon[] icons = {potionIcon, mapIcon, grimoireIcon, charmIcon};
+        return icons[index];
+    }
+
     void drawItemIcon(Graphics2D g, int index, int x, int y, int sc, Color mono) {
-        if (index != 0 || potionIcon == null || potionIcon.getIconWidth() <= 0
-            || potionIcon.getIconHeight() <= 0) {
-            sprite(g, ICONS[index], x, y, sc, mono, null, false);
+        ImageIcon icon = itemSpriteForIndex(index);
+        if (icon != null && icon.getIconWidth() > 0 && icon.getIconHeight() > 0) {
+            int size = 8 * sc;
+            g.drawImage(icon.getImage(), x, y, size, size, null);
+            if (mono != null) {
+                Composite oldComposite = g.getComposite();
+                g.setComposite(AlphaComposite.SrcAtop);
+                g.setColor(mono);
+                g.fillRect(x, y, size, size);
+                g.setComposite(oldComposite);
+            }
             return;
         }
-        int size = 8 * sc;
-        g.drawImage(potionIcon.getImage(), x, y, size, size, null);
-        if (mono != null) {
-            Composite oldComposite = g.getComposite();
-            g.setComposite(AlphaComposite.SrcAtop);
-            g.setColor(mono);
-            g.fillRect(x, y, size, size);
-            g.setComposite(oldComposite);
-        }
+        sprite(g, ICONS[index], x, y, sc, mono, null, false);
     }
 
     static int iconFor(String name) {
@@ -311,6 +317,9 @@ public class GoblinDoorsGUI extends JPanel {
     ImageIcon idleHand;
     ImageIcon castingHand;
     ImageIcon potionIcon;
+    ImageIcon mapIcon;
+    ImageIcon grimoireIcon;
+    ImageIcon charmIcon;
     ImageIcon heartFilled, heartEmpty;
     Image menuPlay, menuHelp, menuInfo, menuSettings;
     int openingScene;
@@ -1072,6 +1081,9 @@ public class GoblinDoorsGUI extends JPanel {
         idleHand = GameAssets.loadImage("images/hand1.png");
         castingHand = GameAssets.loadImage("images/hand2.png");
         potionIcon = GameAssets.loadImage("icons/potion.png");
+        mapIcon = GameAssets.loadImage("icons/map.png");
+        grimoireIcon = GameAssets.loadImage("icons/grimoire.png");
+        charmIcon = GameAssets.loadImage("icons/charm.png");
         heartFilled = GameAssets.loadImage("icons/heart_filled.png");
         heartEmpty = GameAssets.loadImage("icons/heart_empty.png");
         dialogueIndicator = tintDialogueIndicator(GameAssets.loadImage("images/dialogueIndicator.png"));
@@ -1537,7 +1549,7 @@ public class GoblinDoorsGUI extends JPanel {
             g.setStroke(new BasicStroke(1));
         } else if (blocked[i] == 3) {          // sealed off by the map
             g.setColor(new Color(0, 0, 0, 150)); g.fill(caveShape(x, y, w, h, 0, seed));
-            sprite(g, ICONS[1], x + w / 2 - 8, y + h / 2 - 8, 2, null, null, false);
+            drawItemIcon(g, 1, x + w / 2 - 8, y + h / 2 - 8, 2, null);
             g.setColor(new Color(230, 60, 60)); g.setStroke(new BasicStroke(2));
             g.drawLine(x + w / 2 - 9, y + h / 2 - 9, x + w / 2 + 9, y + h / 2 + 9);
             g.drawLine(x + w / 2 + 9, y + h / 2 - 9, x + w / 2 - 9, y + h / 2 + 9);

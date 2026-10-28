@@ -1,7 +1,10 @@
 import javax.sound.sampled.*;
 import java.io.File;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 
 final class GameAudio {
@@ -14,6 +17,8 @@ final class GameAudio {
     private volatile boolean buttonBoopRequested;
     private volatile Clip lightSpellClip;
     private volatile boolean lightSpellRequested;
+    private final Map<String, Clip> soundEffects = new HashMap<>();
+    private final Set<String> requestedSoundEffects = new HashSet<>();
     private volatile Clip homeMusicClip;
     private SourceDataLine caveAmbienceLine;
     private Thread caveAmbienceThread;
@@ -33,6 +38,12 @@ final class GameAudio {
         loadDialogueBoopAsync();
         loadButtonBoopAsync();
         loadLightSpellAsync();
+        loadSoundEffectAsync("hpLost.wav");
+        loadSoundEffectAsync("itemReveal.wav");
+        loadSoundEffectAsync("caveReveal.wav");
+        loadSoundEffectAsync("gameOver.wav");
+        loadSoundEffectAsync("winnerSFX.wav");
+        loadSoundEffectAsync("audioRustle.wav");
     }
 
     void playNarration(String path) {
@@ -296,6 +307,9 @@ final class GameAudio {
         if (dialogueBoopClip != null && dialogueBoopClip.isOpen()) applyMute(dialogueBoopClip);
         if (buttonBoopClip != null && buttonBoopClip.isOpen()) applyMute(buttonBoopClip);
         if (lightSpellClip != null && lightSpellClip.isOpen()) applyMute(lightSpellClip);
+        for (Clip clip : soundEffects.values()) {
+            if (clip.isOpen()) applyMute(clip);
+        }
         if (homeMusicClip != null && homeMusicClip.isOpen()) applyMute(homeMusicClip);
         if (caveAmbienceLine != null && caveAmbienceLine.isOpen()) applyMute(caveAmbienceLine);
     }
@@ -394,6 +408,38 @@ final class GameAudio {
         loader.start();
     }
 
+    private void loadSoundEffectAsync(String name) {
+        Thread loader = new Thread(() -> {
+            String path = "audio/" + name;
+            File file = GameAssets.resolveFile(path);
+            if (file == null) {
+                errorLogger.accept("Sound effect file not found. Working directory: "
+                    + System.getProperty("user.dir") + "; looking for: " + path);
+                return;
+            }
+            try (AudioInputStream source = AudioSystem.getAudioInputStream(file)) {
+                AudioFormat format = source.getFormat();
+                AudioFormat playbackFormat = new AudioFormat(AudioFormat.Encoding.PCM_SIGNED,
+                    format.getSampleRate(), 16, format.getChannels(),
+                    format.getChannels() * 2, format.getSampleRate(), false);
+                try (AudioInputStream stream = AudioSystem.getAudioInputStream(playbackFormat, source)) {
+                    Clip clip = AudioSystem.getClip();
+                    clip.open(stream);
+                    setClipGain(clip, 0.8f, name);
+                    synchronized (this) {
+                        soundEffects.put(name, clip);
+                        applyMute(clip);
+                        if (requestedSoundEffects.remove(name) && !muted) playEffect(clip);
+                    }
+                }
+            } catch (Exception e) {
+                errorLogger.accept("Could not load sound effect: " + file + " - " + e.getMessage());
+            }
+        }, "sound-effect-loader-" + name);
+        loader.setDaemon(true);
+        loader.start();
+    }
+
     synchronized void playDialogueBoop() {
         Clip clip = dialogueBoopClip;
         if (clip == null || !clip.isOpen()) {
@@ -423,6 +469,46 @@ final class GameAudio {
         }
         lightSpellRequested = false;
         if (clip.isRunning()) return;
+        clip.setFramePosition(0);
+        clip.start();
+    }
+
+    synchronized void playHpLost() {
+        playSoundEffect("hpLost.wav");
+    }
+
+    synchronized void playItemReveal() {
+        playSoundEffect("itemReveal.wav");
+    }
+
+    synchronized void playCaveReveal() {
+        playSoundEffect("caveReveal.wav");
+    }
+
+    synchronized void playGameOver() {
+        playSoundEffect("gameOver.wav");
+    }
+
+    synchronized void playWinner() {
+        playSoundEffect("winnerSFX.wav");
+    }
+
+    synchronized void playRustle() {
+        playSoundEffect("audioRustle.wav");
+    }
+
+    private void playSoundEffect(String name) {
+        if (muted) return;
+        Clip clip = soundEffects.get(name);
+        if (clip == null || !clip.isOpen()) {
+            requestedSoundEffects.add(name);
+            return;
+        }
+        playEffect(clip);
+    }
+
+    private void playEffect(Clip clip) {
+        if (clip.isRunning()) clip.stop();
         clip.setFramePosition(0);
         clip.start();
     }

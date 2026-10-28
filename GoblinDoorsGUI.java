@@ -16,7 +16,7 @@ import java.util.function.*;
  *
  * Rules
  *  - 30 HP. Walking into a snake's cave costs 10 HP. 0 HP = game over.
- *  - 2 Light Spells per round. A Light Spell lights up one cave entrance so you can peek inside.
+ *  - Rounds 1-2 grant 1 Light Spell; rounds 3-4 grant 2. A spell lights one cave entrance.
  *  - Rounds 1-2: 3 cave entrances. Rounds 3-5: 5 cave entrances.
  *  - Items are usable: Mana Potion (+1 Light Spell), Map (seals off a dangerous cave),
  *    Grimoire (ward blocks the next snake bite), Old Charm (+10 HP).
@@ -93,33 +93,6 @@ public class GoblinDoorsGUI extends JPanel {
         PAL.put('M', new Color(225, 205, 150)); PAL.put('m', new Color(110, 30, 40));
     }
 
-    static final String[] GOBLIN = {
-        "..g........g..",
-        ".ggg......ggg.",
-        "..gggggggggg..",
-        "..ggYkggYkgg..",
-        "..gggggggggg..",
-        "..ggkmmmmkgg..",
-        "...gggggggg...",
-        "..cccccccccc..",
-        ".gccccccccccg.",
-        ".g.cccccccc.g.",
-        "...cccccccc...",
-        "...cc....cc...",
-        "..kkk....kkk.."
-    };
-    static final String[] SNAKE = {
-        ".....gggg.....",
-        "....gYggYg....",
-        "....gggggg....",
-        ".....gGgg.xx..",
-        "......gg......",
-        ".....gGgg.....",
-        "..gggGggggg...",
-        ".ggGggggGgggg.",
-        ".gggggggggggG.",
-        "..GGggGgGGGG.."
-    };
     static final String[][] ICONS = {
         { "..kkkk..", "...nn...", "...kk...", "..kBBk..", ".kBBBBk.", ".kBBwBk.", ".kBBBBk.", "..kkkk.." },
         { ".kkkkkk.", "kMMMMxMk", "kMxMMMMk", "kMMMxMMk", "kMMxxxMk", "kMMMMMMk", "kMxMMMMk", ".kkkkkk." },
@@ -186,7 +159,13 @@ public class GoblinDoorsGUI extends JPanel {
         g.fillRect(0, 0, 32, 32);
         g.setColor(new Color(255, 241, 168));
         g.drawRect(0, 0, 31, 31);
-        sprite(g, GOBLIN, 2, 3, 2, null, null, false);
+        ImageIcon goblin = GameAssets.loadImage("images/goblinNotStartled.gif");
+        if (goblin != null && goblin.getIconWidth() > 0 && goblin.getIconHeight() > 0) {
+            g.drawImage(goblin.getImage(), 2, 3, 28, 26, null);
+        } else {
+            g.setFont(new Font(Font.MONOSPACED, Font.BOLD, 24));
+            g.drawString("G", 8, 26);
+        }
         g.dispose();
         return placeholder;
     }
@@ -221,6 +200,8 @@ public class GoblinDoorsGUI extends JPanel {
     int dh() { return nDoors == 3 ? 64 : 60; }
     int dy() { return 98 - dh(); }
     int dx(int i) { return nDoors == 3 ? 56 + 80 * i : 23 + 59 * i; }
+    int doorVisualWidth() { return Math.round(dw() * 1.15f); }
+    int doorVisualX(int i) { return dx(i) - (doorVisualWidth() - dw()) / 2; }
 
     /** Irregular cave-mouth outline: jagged sides and a lumpy, rough top. The same seed always gives the same
      *  random sequence, so the opening (grow 0) and its rock surround (grow > 0) line up. */
@@ -321,6 +302,10 @@ public class GoblinDoorsGUI extends JPanel {
     ImageIcon wizardCharacter;
     ImageIcon holyWizard;
     ImageIcon goblinStartled;
+    ImageIcon goblinNotStartled;
+    ImageIcon snakeCharacter;
+    ImageIcon doorOne;
+    ImageIcon doorOneHighlighted;
     ImageIcon potionIcon;
     ImageIcon heartFilled, heartEmpty;
     Image menuPlay, menuHelp, menuInfo, menuSettings;
@@ -375,7 +360,7 @@ public class GoblinDoorsGUI extends JPanel {
         "A thief stole your belongings and fled into a big cavern full of dark cave entrances. "
         + "Each round you must choose ONE cave to walk into. Rounds 1-2 show 3 caves. Rounds 3-5 show 5 caves. "
         + "One cave holds your stolen item. Snakes guard every other cave.",
-        "You can cast 2 Light Spells every round. A Light Spell lights up one cave entrance so you can peek inside: "
+        "You get 1 Light Spell in rounds 1-2 and 2 in rounds 3-4. A Light Spell lights one cave entrance so you can peek inside: "
         + "you will see your item or a snake. The light fades after a moment, so remember what you saw! "
         + "Use all available Light Spells before choosing a cave to enter. Your Light Spells refill at the start of every round.",
         "You have 30 HP for the whole journey. Walking into a snake's cave costs 10 HP. "
@@ -410,8 +395,13 @@ public class GoblinDoorsGUI extends JPanel {
     }
     void setOpeningScene(int sceneNo) {
         if (openingScene == sceneNo) return;
+        boolean skipFade = openingScene == 3
+            && (sceneNo == 4 || sceneNo == BLACK_OPENING_SCENE)
+            || openingScene == BLACK_OPENING_SCENE && sceneNo == 4
+            || openingScene == 4 && sceneNo == 5;
         openingScene = sceneNo;
-        sceneFade = 0f;
+        sceneFade = skipFade ? 1f : 0f;
+        if (sceneNo == BLACK_OPENING_SCENE) audio.playRustle();
         if (sceneNo == 3) audio.playCaveAmbience();
     }
     Step sys(String t) {
@@ -427,8 +417,20 @@ public class GoblinDoorsGUI extends JPanel {
     Step askDoor(String purpose, String q, IntConsumer cb) {
         return () -> { cur = q; curSys = true; reveal = 0; doorCb = cb; doorPurpose = purpose; mode = Mode.DOOR; blocking = true; };
     }
-    Step endStep()   { return () -> { mode = Mode.END; blocking = true; }; }
-    Step overStep()  { return () -> { mode = Mode.OVER; blocking = true; }; }
+    Step endStep()   {
+        return () -> {
+            if (!practice) audio.playWinner();
+            mode = Mode.END;
+            blocking = true;
+        };
+    }
+    Step overStep()  {
+        return () -> {
+            audio.playGameOver();
+            mode = Mode.OVER;
+            blocking = true;
+        };
+    }
 
     void toast(String t) {
         logs.add(new Log(t, System.currentTimeMillis()));
@@ -479,6 +481,7 @@ public class GoblinDoorsGUI extends JPanel {
         }
         lastBlocked = false;
         hp = Math.max(0, hp - SNAKE_DMG);
+        audio.playHpLost();
         hurt = 1; shake = 9;
         toast("SNAKE BITE: -" + SNAKE_DMG + " HP");
         if (hp == 0) {
@@ -578,7 +581,7 @@ public class GoblinDoorsGUI extends JPanel {
             act(() -> scene = Scene.TUNNEL),
             say("The deeper he goes, the darker it becomes."),
             say("He casts \"Lumen\". A faint light appears above his palm."),
-            say("\"I can't keep doing this,\" he mutters. \"I can only spare a couple of these each time.\""),
+            say("\"I can't keep doing this,\" he mutters. \"I have to make every spell count.\""),
             say("The footprints suddenly disappear. The tunnel opens into a huge cavern, its walls pocked with dark cave entrances."),
             act(() -> { scene = Scene.DOORS; roundNo = 0; nDoors = 3; resetCaves(); }),
             sys("Entered the Caverns of Paths"),
@@ -600,7 +603,8 @@ public class GoblinDoorsGUI extends JPanel {
     }
 
     void startRound(int r) {
-        roundNo = r; spells = 2; maxSpells = 2;
+        roundNo = r;
+        spells = maxSpells = r <= 2 ? 1 : 2;
         enteredDoor = -1;
         showVisualCue(r == 5 ? "FINAL ROUND" : "ROUND " + r);
         nDoors = r <= 2 ? 3 : 5;
@@ -618,7 +622,7 @@ public class GoblinDoorsGUI extends JPanel {
         if (r == 5 && !practice) L.add(say("The thief's trail ends here. Five dark caves... and one of them hides the Seal."));
         L.add(sys(r == 5 ? "FINAL ROUND" : "ROUND " + r));
         L.add(sys(nDoors + " CAVE ENTRANCES"));
-        L.add(sys("LIGHT SPELLS: 2/2"));
+        L.add(sys("LIGHT SPELLS: " + spells + "/" + maxSpells));
         if (r == 2 && !practice) L.add(sys("WARNING: Memories may affect your choices."));
         if (r == 3 && !practice) L.add(sys("Four snakes now lurk among the caves."));
         L.add(act(this::lightPhase));
@@ -661,12 +665,18 @@ public class GoblinDoorsGUI extends JPanel {
                 doorOpen[p] = true;
                 enteredDoor = p;
                 showVisualCue("ENTERING CAVE " + roman(p));
+                audio.playCaveReveal();
             }));
             switch (types[p]) {
                 case ITEM: {
                     if (practice) {
                         L.add(say("Practice: you found the item for round " + r + "!"));
-                        L.add(act(() -> { itemShow = r - 1; itemDoor = p; flash = 0.5; }));
+                        L.add(act(() -> {
+                            itemShow = r - 1;
+                            itemDoor = p;
+                            flash = 0.5;
+                            audio.playItemReveal();
+                        }));
                         L.add(say(r < 5 ? "Nice work. On to the next round." : "That was the last round."));
                         L.add(act(() -> { itemShow = -1; itemDoor = -1; if (r < 5) startRound(r + 1); else practiceDone(); }));
                     } else if (r == 5) {
@@ -674,7 +684,13 @@ public class GoblinDoorsGUI extends JPanel {
                     } else {
                         final String item = ITEMS[r - 1];
                         L.add(say("He finds his item on the cave floor: " + item + "!"));
-                        L.add(act(() -> { inventory.add(item); itemShow = r - 1; itemDoor = p; flash = 0.5; }));
+                        L.add(act(() -> {
+                            inventory.add(item);
+                            itemShow = r - 1;
+                            itemDoor = p;
+                            flash = 0.5;
+                            audio.playItemReveal();
+                        }));
                         L.add(sys("One item recovered"));
                         L.add(sys((5 - r) + " items remaining."));
                         L.add(sys(ITEM_SHORT[r - 1]));
@@ -712,6 +728,7 @@ public class GoblinDoorsGUI extends JPanel {
             sys("One last Light Spell remains"),
             askYesNo("Use the last Light Spell?", b -> { }),
             act(() -> spells = 0),
+            act(() -> audio.playLightSpell()),
             say("He uses the last Light Spell."),
             say("The darkness disappears, but he only sees himself..."),
             say("Not who he is now, but someone from the past."),
@@ -913,7 +930,9 @@ public class GoblinDoorsGUI extends JPanel {
         }
     }
 
-    Rectangle doorRect(int i) { return new Rectangle(dx(i) * S, dy() * S, dw() * S, dh() * S); }
+    Rectangle doorRect(int i) {
+        return new Rectangle(doorVisualX(i) * S, dy() * S, doorVisualWidth() * S, dh() * S);
+    }
 
     void pick(int i) {
         if (mode != Mode.DOOR || i >= nDoors || !open[i]) return;
@@ -1023,7 +1042,7 @@ public class GoblinDoorsGUI extends JPanel {
         setPreferredSize(new Dimension(PW, PH));
         setFocusable(true);
         controller = XInputController.connect();
-        menuBackground = GameAssets.loadImage("images/bgMenu.jpg");
+        menuBackground = GameAssets.loadImage("images/bgMenu.gif");
         menuBanner = GameAssets.loadImage("images/bannerMenu.png");
         storyScenes = new ImageIcon[] {
             GameAssets.loadImage("scenes/scene1.gif"),
@@ -1035,6 +1054,10 @@ public class GoblinDoorsGUI extends JPanel {
         wizardCharacter = GameAssets.loadImage("images/wizard_cs.gif");
         holyWizard = GameAssets.loadImage("images/holyWizard.gif");
         goblinStartled = GameAssets.loadImage("images/goblinStartled.gif");
+        goblinNotStartled = GameAssets.loadImage("images/goblinNotStartled.gif");
+        snakeCharacter = GameAssets.loadImage("images/snake.gif");
+        doorOne = GameAssets.loadImage("images/doorOne.png");
+        doorOneHighlighted = GameAssets.loadImage("images/doorOneHighlighted.png");
         potionIcon = GameAssets.loadImage("icons/potion.png");
         heartFilled = GameAssets.loadImage("icons/heart_filled.png");
         heartEmpty = GameAssets.loadImage("icons/heart_empty.png");
@@ -1418,9 +1441,17 @@ public class GoblinDoorsGUI extends JPanel {
             }
             case SNAKE:
                 glow(g, cx, y + h - 20, w * 0.8f, new Color(120, 220, 80), 80);
-                sprite(g, SNAKE, cx - 14, y + h - 30 + (frame / 6 % 2), 2, null, null, false);
-                g.setColor(new Color(255, 240, 90, 200));
-                if ((frame / 14) % 5 != 0) { g.fillRect(cx - 7, y + h - 28 + (frame / 6 % 2), 2, 2); g.fillRect(cx + 3, y + h - 28 + (frame / 6 % 2), 2, 2); }
+                if (snakeCharacter != null && snakeCharacter.getIconWidth() > 0
+                    && snakeCharacter.getIconHeight() > 0) {
+                    int availableWidth = Math.max(1, w - 6);
+                    int availableHeight = Math.max(1, h - 6);
+                    double imageScale = Math.min(availableWidth / (double) snakeCharacter.getIconWidth(),
+                        availableHeight / (double) snakeCharacter.getIconHeight());
+                    int imageWidth = (int) Math.round(snakeCharacter.getIconWidth() * imageScale);
+                    int imageHeight = (int) Math.round(snakeCharacter.getIconHeight() * imageScale);
+                    g.drawImage(snakeCharacter.getImage(), cx - imageWidth / 2,
+                        y + h - imageHeight - 3, imageWidth, imageHeight, this);
+                }
                 break;
         }
     }
@@ -1459,9 +1490,28 @@ public class GoblinDoorsGUI extends JPanel {
         int x = dx(i), y = dy(), w = dw(), h = dh();
         long seed = 31 + i * 17 + nDoors;
         boolean lit = peek[i] || doorOpen[i];
-        drawMouth(g, x, y, w, h, seed, gg -> {
-            if (lit) drawInterior(gg, i, x, y, w, h); else drawDark(gg, x, y, w, h);
-        });
+        ImageIcon doorImage = hovered && doorOneHighlighted != null
+            && doorOneHighlighted.getIconWidth() > 0 && doorOneHighlighted.getIconHeight() > 0
+            ? doorOneHighlighted : doorOne;
+        if (doorImage != null && doorImage.getIconWidth() > 0 && doorImage.getIconHeight() > 0) {
+            int visualWidth = doorVisualWidth();
+            int visualX = doorVisualX(i);
+            g.drawImage(doorImage.getImage(), visualX, y, visualWidth, h, null);
+            if (lit) {
+                Shape oldClip = g.getClip();
+                int openingX = x + Math.round(w * 0.18f);
+                int openingY = y + Math.round(h * 0.12f);
+                int openingW = Math.round(w * 0.64f);
+                int openingH = Math.round(h * 0.84f);
+                g.clip(caveShape(openingX, openingY, openingW, openingH, 0, seed));
+                drawInterior(g, i, openingX, openingY, openingW, openingH);
+                g.setClip(oldClip);
+            }
+        } else {
+            drawMouth(g, x, y, w, h, seed, gg -> {
+                if (lit) drawInterior(gg, i, x, y, w, h); else drawDark(gg, x, y, w, h);
+            });
+        }
         if (peek[i]) {
             glow(g, x + w / 2f, y + h * 0.55f, w * 1.1f, new Color(255, 230, 150), 70);
             drawLightOrb(g, x + w / 2, y + h / 2 - 6);
@@ -1487,7 +1537,9 @@ public class GoblinDoorsGUI extends JPanel {
             g.setStroke(new BasicStroke(3));
             g.draw(caveShape(x, y, w, h, 0, seed));
             g.setStroke(new BasicStroke(1));
-        } else if (hovered) {
+        } else if (hovered && (doorOne == null || doorOne.getIconWidth() <= 0
+            || doorOne.getIconHeight() <= 0 || doorOneHighlighted == null
+            || doorOneHighlighted.getIconWidth() <= 0 || doorOneHighlighted.getIconHeight() <= 0)) {
             g.setColor(new Color(255, 241, 168));
             g.setStroke(new BasicStroke(2));
             g.draw(caveShape(x, y, w, h, 0, seed));
@@ -1588,7 +1640,9 @@ public class GoblinDoorsGUI extends JPanel {
                 drawCrystal(g, 296, 134, new Color(170, 110, 255));
                 glow(g, 232, 140, 40, new Color(255, 40, 40), 90 + (int) (Math.sin(frame * 0.2) * 30));
                 sprite(g, ICONS[4], 224, 132, 2, null, null, false);
-                if (goblinVisible) sprite(g, GOBLIN, 168, 112, 3, null, null, false);
+                if (goblinVisible) {
+                    drawImageContain(g, goblinNotStartled, 158, 95, 62, 42);
+                }
                 drawMage(g, 60, 112, 2);
                 vignette(g, 160, 125, 190, 205, SH);
                 break;
@@ -1601,7 +1655,7 @@ public class GoblinDoorsGUI extends JPanel {
                     g.drawLine(160, 80, 160 + (int) (Math.cos(a) * 200), 80 + (int) (Math.sin(a) * 200));
                 }
                 glow(g, 160, 80, 100, new Color(255, 230, 150), 150 + (int) (Math.sin(frame * 0.1) * 30));
-                drawHolyWizard(g, 128, 62, 4);
+                drawHolyWizard(g, 126, 62, 5);
                 drawMage(g, 232, 106, 2);
                 glow(g, 248, 120, 24, new Color(180, 160, 255), 60);
                 g.setColor(new Color(60, 50, 90)); g.fillRect(0, 148, W, 12);
@@ -2064,7 +2118,7 @@ public class GoblinDoorsGUI extends JPanel {
         bar.setBackground(new Color(20, 17, 34));
         bar.setBorder(BorderFactory.createMatteBorder(0, 0, 2, 0, new Color(255, 241, 168)));
 
-        JLabel title = new JLabel("  GOBLINS AND CAVERNS");
+        JLabel title = new JLabel("  re:Memory");
         title.setForeground(new Color(255, 241, 168));
         title.setFont(pixelFont(Font.BOLD, 16));
         bar.add(title, BorderLayout.CENTER);
@@ -2539,7 +2593,8 @@ public class GoblinDoorsGUI extends JPanel {
                 y = drawWrapped(g, "A forgetful mage wakes in a cavern and finds his belongings stolen. Follow the thief through dark cave "
                     + "entrances, recover five lost items, and uncover the truth behind the Curse of Mana.", tx, y, tw, 30) + 10;
                 g.setColor(cyan);
-                y = drawWrapped(g, "30 HP  -  2 Light Spells per round  -  usable items", tx, y, tw, 30) + 10;
+                y = drawWrapped(g, "30 HP  -  1 Light Spell in rounds 1-2, 2 in rounds 3-4  -  usable items",
+                    tx, y, tw, 30) + 10;
                 g.setColor(new Color(170, 170, 200));
                 g.setFont(pixelFont(Font.BOLD, 16));
                 drawWrapped(g, "Made with Java Swing. All art is drawn in code. Runs in a 960 x 720 window or Fullscreen 1920 x 1080.", tx, y, tw, 26);
@@ -2609,10 +2664,17 @@ public class GoblinDoorsGUI extends JPanel {
     void drawTutorialArt(Graphics2D g, int page) {
         int cy = 470;
         if (page == 0) {
-            sprite(g, GOBLIN, PW / 2 - 130, cy - 40, 5, null, null, false);
+            drawImageContain(g, goblinNotStartled, PW / 2 - 170, cy - 50, 100, 95);
             for (int i = 0; i < 3; i++) {
-                g.setColor(new Color(60, 54, 76)); g.fill(caveShape(PW / 2 - 40 + i * 60, cy - 36, 40, 80, 3, 40L + i));
-                g.setColor(new Color(6, 5, 10)); g.fill(caveShape(PW / 2 - 40 + i * 60, cy - 36, 40, 80, 0, 40L + i));
+                int x = PW / 2 - 60 + i * 72;
+                if (doorOne != null && doorOne.getIconWidth() > 0 && doorOne.getIconHeight() > 0) {
+                    drawImageContain(g, doorOne, x, cy - 55, 62, 100);
+                } else {
+                    g.setColor(new Color(60, 54, 76));
+                    g.fill(caveShape(x, cy - 55, 62, 100, 3, 40L + i));
+                    g.setColor(new Color(6, 5, 10));
+                    g.fill(caveShape(x, cy - 55, 62, 100, 0, 40L + i));
+                }
             }
         } else if (page == 1) {
             for (int i = 0; i < 3; i++) {
@@ -2621,7 +2683,7 @@ public class GoblinDoorsGUI extends JPanel {
                 g.setColor(new Color(255, 252, 215)); g.fillOval(ox - 10, cy - 10, 20, 20);
             }
         } else {
-            sprite(g, SNAKE, PW / 2 - 200, cy - 30, 6, null, null, false);
+            drawImageContain(g, snakeCharacter, PW / 2 - 200, cy - 50, 130, 100);
             g.setColor(new Color(30, 30, 50)); g.fillRect(PW / 2 - 30, cy - 12, 240, 28);
             g.setColor(new Color(70, 190, 90)); g.fillRect(PW / 2 - 30, cy - 12, 160, 28);
             g.setColor(Color.WHITE);
@@ -2629,6 +2691,16 @@ public class GoblinDoorsGUI extends JPanel {
             g.setFont(pixelFont(Font.BOLD, 18));
             centerText(g, "-10 HP per snake", PW / 2 + 90, cy + 42);
         }
+    }
+
+    void drawImageContain(Graphics2D g, ImageIcon icon, int x, int y, int width, int height) {
+        if (icon == null || icon.getIconWidth() <= 0 || icon.getIconHeight() <= 0) return;
+        double scale = Math.min(width / (double) icon.getIconWidth(),
+            height / (double) icon.getIconHeight());
+        int imageWidth = (int) Math.round(icon.getIconWidth() * scale);
+        int imageHeight = (int) Math.round(icon.getIconHeight() * scale);
+        g.drawImage(icon.getImage(), x + (width - imageWidth) / 2, y + (height - imageHeight) / 2,
+            imageWidth, imageHeight, this);
     }
 
     void drawEndScreen(Graphics2D g) {
@@ -2673,7 +2745,7 @@ public class GoblinDoorsGUI extends JPanel {
     // =====================================================================
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
-            JFrame f = new JFrame("Goblins and Caverns");
+            JFrame f = new JFrame("re:Memory");
             f.setIconImage(loadWindowIcon());
             GoblinDoorsGUI panel = new GoblinDoorsGUI();
             panel.window = f;

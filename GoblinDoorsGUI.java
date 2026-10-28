@@ -271,6 +271,9 @@ public class GoblinDoorsGUI extends JPanel {
     final GameAudio audio = new GameAudio(message -> System.err.println(message));
     boolean paused;
     boolean confirmingExit;
+    boolean confirmingMainMenu;
+    boolean confirmingMenuExit;
+    boolean pauseSettings;
     long pauseStartedAt;
 
     // ---------- Visual state ----------
@@ -297,9 +300,12 @@ public class GoblinDoorsGUI extends JPanel {
     final Rectangle againRect = new Rectangle(230, 600, 240, 56);
     final Rectangle menuRect = new Rectangle(490, 600, 240, 56);
     final Rectangle pauseRect = new Rectangle(20, 10, 44, 44);
-    final Rectangle resumeRect = new Rectangle(340, 286, 280, 64);
-    final Rectangle pauseMenuRect = new Rectangle(340, 372, 280, 64);
-    final Rectangle pauseExitRect = new Rectangle(340, 458, 280, 64);
+    final Rectangle resumeRect = new Rectangle(340, 245, 280, 58);
+    final Rectangle pauseSettingsRect = new Rectangle(340, 325, 280, 58);
+    final Rectangle pauseMenuRect = new Rectangle(340, 405, 280, 58);
+    final Rectangle pauseExitRect = new Rectangle(340, 485, 280, 58);
+    final Rectangle menuExitCancelRect = new Rectangle(280, 390, 180, 56);
+    final Rectangle menuExitConfirmRect = new Rectangle(500, 390, 180, 56);
 
     // ---------- Main menu (all coordinates are in the 960x720 virtual canvas) ----------
     static final int MENU_CENTER_X = PW / 2;
@@ -458,7 +464,8 @@ public class GoblinDoorsGUI extends JPanel {
         resetCaves();
         flash = hurt = shake = 0;
         cur = ""; reveal = 0; yesNoCb = null; doorCb = null; blocking = false;
-        paused = false; confirmingExit = false; pauseStartedAt = 0;
+        paused = false; confirmingExit = false; confirmingMainMenu = false;
+        confirmingMenuExit = false; pauseSettings = false; pauseStartedAt = 0;
     }
 
     /** Shows the main menu. */
@@ -795,6 +802,8 @@ public class GoblinDoorsGUI extends JPanel {
         if (pause) {
             paused = true;
             confirmingExit = false;
+            confirmingMainMenu = false;
+            pauseSettings = false;
             pauseStartedAt = System.currentTimeMillis();
             audio.pauseNarration();
             audio.pauseCaveAmbience(true);
@@ -804,18 +813,37 @@ public class GoblinDoorsGUI extends JPanel {
             audio.resumeNarration();
             audio.pauseCaveAmbience(false);
             confirmingExit = false;
+            confirmingMainMenu = false;
+            pauseSettings = false;
             paused = false;
         }
     }
 
     void clickPauseMenu(Point p) {
-        if (confirmingExit) {
+        if (pauseSettings) {
+            if (backRect.contains(p)) {
+                audio.playButtonBoop();
+                pauseSettings = false;
+            } else if (fsRect.contains(p)) {
+                audio.playButtonBoop();
+                toggleFullscreen();
+            } else if (muteRect.contains(p)) {
+                audio.playButtonBoop();
+                audio.toggleMute();
+            } else if (volumeSliderRect.contains(p)) {
+                setHomeMusicVolume(p);
+            }
+            return;
+        }
+        if (confirmingExit || confirmingMainMenu) {
             if (pauseMenuRect.contains(p)) {
                 audio.playButtonBoop();
                 confirmingExit = false;
+                confirmingMainMenu = false;
             } else if (pauseExitRect.contains(p)) {
                 audio.playButtonBoop();
-                System.exit(0);
+                if (confirmingExit) System.exit(0);
+                else toMenu();
             }
             return;
         }
@@ -824,7 +852,10 @@ public class GoblinDoorsGUI extends JPanel {
             setPaused(false);
         } else if (pauseMenuRect.contains(p)) {
             audio.playButtonBoop();
-            toMenu();
+            confirmingMainMenu = true;
+        } else if (pauseSettingsRect.contains(p)) {
+            audio.playButtonBoop();
+            pauseSettings = true;
         } else if (pauseExitRect.contains(p)) {
             audio.playButtonBoop();
             confirmingExit = true;
@@ -907,9 +938,15 @@ public class GoblinDoorsGUI extends JPanel {
     }
 
     boolean overClickable() {
-        if (paused) return confirmingExit
-            ? pauseMenuRect.contains(mouse) || pauseExitRect.contains(mouse)
-            : resumeRect.contains(mouse) || pauseMenuRect.contains(mouse) || pauseExitRect.contains(mouse);
+        if (paused) {
+            if (pauseSettings) return fsRect.contains(mouse) || muteRect.contains(mouse)
+                || volumeSliderRect.contains(mouse) || backRect.contains(mouse);
+            if (confirmingExit || confirmingMainMenu) {
+                return pauseMenuRect.contains(mouse) || pauseExitRect.contains(mouse);
+            }
+            return resumeRect.contains(mouse) || pauseSettingsRect.contains(mouse)
+                || pauseMenuRect.contains(mouse) || pauseExitRect.contains(mouse);
+        }
         if (canPause() && pauseRect.contains(mouse)) return true;
         switch (mode) {
             case MENU: return menuHit(mouse) != 0;
@@ -972,7 +1009,9 @@ public class GoblinDoorsGUI extends JPanel {
             @Override public void mouseDragged(MouseEvent e) {
                 controllerCursorVisible = false;
                 mouse = toVirtual(e.getPoint());
-                if (mode == Mode.MENU && panel == Panel.SETTINGS) setHomeMusicVolume(mouse);
+                if ((mode == Mode.MENU && panel == Panel.SETTINGS) || (paused && pauseSettings)) {
+                    setHomeMusicVolume(mouse);
+                }
             }
         });
         addKeyListener(new KeyAdapter() {
@@ -983,19 +1022,34 @@ public class GoblinDoorsGUI extends JPanel {
                     return;
                 }
                 if (paused) {
-                    if (confirmingExit) {
+                    if (pauseSettings) {
+                        if (e.getKeyCode() == KeyEvent.VK_ESCAPE || e.getKeyCode() == KeyEvent.VK_N) {
+                            pauseSettings = false;
+                        }
+                    } else if (confirmingExit || confirmingMainMenu) {
                         if (e.getKeyCode() == KeyEvent.VK_ESCAPE || e.getKeyCode() == KeyEvent.VK_N) {
                             confirmingExit = false;
+                            confirmingMainMenu = false;
                         } else if (e.getKeyCode() == KeyEvent.VK_Y) {
-                            System.exit(0);
+                            if (confirmingExit) System.exit(0);
+                            else toMenu();
                         }
                     } else if (e.getKeyCode() == KeyEvent.VK_ESCAPE || e.getKeyCode() == KeyEvent.VK_ENTER
                         || e.getKeyCode() == KeyEvent.VK_SPACE) setPaused(false);
                     return;
                 }
+                if (mode == Mode.MENU && confirmingMenuExit) {
+                    if (e.getKeyCode() == KeyEvent.VK_ESCAPE || e.getKeyCode() == KeyEvent.VK_N) {
+                        confirmingMenuExit = false;
+                    } else if (e.getKeyCode() == KeyEvent.VK_ENTER || e.getKeyCode() == KeyEvent.VK_Y) {
+                        System.exit(0);
+                    }
+                    return;
+                }
                 switch (e.getKeyCode()) {
                     case KeyEvent.VK_ESCAPE:
                         if (canPause()) setPaused(true);
+                        else if (mode == Mode.MENU && confirmingMenuExit) confirmingMenuExit = false;
                         else if (mode == Mode.MENU && panel != Panel.NONE) panel = Panel.NONE;
                         else if (isFullscreen()) toggleFullscreen();
                         break;
@@ -1110,7 +1164,8 @@ public class GoblinDoorsGUI extends JPanel {
         if ((pressed & PAD_A) != 0) click(new Point(mouse));
         if ((pressed & PAD_B) != 0) controllerBack();
         if ((pressed & (PAD_START | PAD_BACK)) != 0) {
-            if (paused) setPaused(false);
+            if (paused && pauseSettings) pauseSettings = false;
+            else if (paused) setPaused(false);
             else if (canPause()) setPaused(true);
         }
         if ((pressed & PAD_X) != 0) useItem(0);
@@ -1121,12 +1176,18 @@ public class GoblinDoorsGUI extends JPanel {
 
     void controllerBack() {
         if (paused) {
-            if (confirmingExit) confirmingExit = false;
+            if (pauseSettings) pauseSettings = false;
+            else if (confirmingExit || confirmingMainMenu) {
+                confirmingExit = false;
+                confirmingMainMenu = false;
+            }
             else setPaused(false);
         } else if (mode == Mode.YESNO) {
             answerYesNo(false);
         } else if (mode == Mode.MENU && panel != Panel.NONE) {
             panel = Panel.NONE;
+        } else if (mode == Mode.MENU && confirmingMenuExit) {
+            confirmingMenuExit = false;
         } else if (canPause()) {
             setPaused(true);
         }
@@ -1612,25 +1673,40 @@ public class GoblinDoorsGUI extends JPanel {
     void drawPauseMenu(Graphics2D g) {
         g.setColor(new Color(0, 0, 0, 190));
         g.fillRect(0, 0, PW, PH);
+        if (pauseSettings) {
+            drawSettingsPanel(g, pauseSettingsHit(mouse));
+            return;
+        }
         g.setColor(new Color(16, 14, 34));
-        g.fillRect(290, 190, 380, 390);
+        g.fillRect(290, 150, 380, 440);
         g.setColor(new Color(255, 241, 168));
-        drawPixelBorder(g, new Rectangle(290, 190, 380, 390), 3);
+        drawPixelBorder(g, new Rectangle(290, 150, 380, 440), 3);
         g.setFont(pixelFont(Font.BOLD, 42));
         g.setColor(new Color(255, 241, 168));
-        if (confirmingExit) {
-            centerText(g, "Exit to Desktop?", PW / 2, 260);
+        if (confirmingExit || confirmingMainMenu) {
+            boolean exiting = confirmingExit;
+            centerText(g, exiting ? "Exit to Desktop?" : "Return to Menu?", PW / 2, 245);
             g.setFont(pixelFont(Font.BOLD, 20));
             g.setColor(new Color(235, 230, 215));
-            centerText(g, "Are you sure you want to quit?", PW / 2, 320);
+            centerText(g, exiting ? "Are you sure you want to quit?"
+                : "Your current game progress will be lost.", PW / 2, 300);
             menuButton(g, pauseMenuRect, "Cancel", true, pauseMenuRect.contains(mouse));
-            menuButton(g, pauseExitRect, "Exit", true, pauseExitRect.contains(mouse));
+            menuButton(g, pauseExitRect, exiting ? "Exit" : "Main Menu", true, pauseExitRect.contains(mouse));
         } else {
-            centerText(g, "Paused", PW / 2, 260);
+            centerText(g, "Paused", PW / 2, 225);
             menuButton(g, resumeRect, "Resume", true, resumeRect.contains(mouse));
+            menuButton(g, pauseSettingsRect, "Settings", true, pauseSettingsRect.contains(mouse));
             menuButton(g, pauseMenuRect, "Main Menu", true, pauseMenuRect.contains(mouse));
             menuButton(g, pauseExitRect, "Exit to Desktop", true, pauseExitRect.contains(mouse));
         }
+    }
+
+    int pauseSettingsHit(Point p) {
+        if (fsRect.contains(p)) return 4;
+        if (muteRect.contains(p)) return 12;
+        if (volumeSliderRect.contains(p)) return 13;
+        if (backRect.contains(p)) return 5;
+        return 0;
     }
 
     void centerText(Graphics2D g, String s, int cx, int y) {
@@ -2088,10 +2164,14 @@ public class GoblinDoorsGUI extends JPanel {
     // =====================================================================
     //  Main menu
     // =====================================================================
-    /** What the mouse is over: 0 nothing, 1 play, 2 exit, 3 settings, 4 fullscreen toggle, 5 back/close,
-     *  6 tutorial, 7 practice, 8 help (?), 9 info (i), 10 previous page, 11 next page. */
+    /** What the mouse is over: 1-11 main menu actions, 12 mute, 13 volume, 14 cancel exit, 15 confirm exit. */
     int menuHit(Point p) {
         if (mode != Mode.MENU || p == null) return 0;
+        if (confirmingMenuExit) {
+            if (menuExitCancelRect.contains(p)) return 14;
+            if (menuExitConfirmRect.contains(p)) return 15;
+            return 0;
+        }
         if (panel == Panel.SETTINGS) {
             if (fsRect.contains(p)) return 4;
             if (muteRect.contains(p)) return 12;
@@ -2131,12 +2211,14 @@ public class GoblinDoorsGUI extends JPanel {
     void menuClick(Point p) {
         switch (menuHit(p)) {
             case 1: launch(); break;
-            case 2: System.exit(0); break;
+            case 2: confirmingMenuExit = true; break;
             case 3: panel = Panel.SETTINGS; break;
             case 4: toggleFullscreen(); break;
             case 5: panel = Panel.NONE; break;
             case 12: audio.toggleMute(); break;
             case 13: setHomeMusicVolume(p); break;
+            case 14: confirmingMenuExit = false; break;
+            case 15: System.exit(0); break;
             case 6: panel = Panel.TUTORIAL; tutPage = 0; break;
             case 7: launchPractice(); break;
             case 8: panel = Panel.HELP; break;
@@ -2253,7 +2335,29 @@ public class GoblinDoorsGUI extends JPanel {
             if (panel == Panel.SETTINGS) drawSettingsPanel(g, ph);
             else drawBigPanel(g, ph);
         }
+        if (confirmingMenuExit) {
+            g.setTransform(base);
+            g.setColor(new Color(0, 0, 0, 180));
+            g.fillRect(0, 0, w, h);
+            g.translate(offX, offY); g.scale(scale, scale);
+            drawMenuExitConfirmation(g);
+        }
         g.setTransform(base);
+    }
+
+    void drawMenuExitConfirmation(Graphics2D g) {
+        Rectangle dialog = new Rectangle(230, 220, 500, 260);
+        g.setColor(new Color(16, 14, 34));
+        g.fillRect(dialog.x, dialog.y, dialog.width, dialog.height);
+        g.setColor(new Color(255, 241, 168));
+        drawPixelBorder(g, dialog, 3);
+        g.setFont(pixelFont(Font.BOLD, 38));
+        centerText(g, "Exit to Desktop?", PW / 2, 290);
+        g.setFont(pixelFont(Font.BOLD, 21));
+        g.setColor(new Color(235, 230, 215));
+        centerText(g, "Are you sure you want to quit?", PW / 2, 335);
+        menuButton(g, menuExitCancelRect, "Cancel", true, menuExitCancelRect.contains(mouse));
+        menuButton(g, menuExitConfirmRect, "Exit", true, menuExitConfirmRect.contains(mouse));
     }
 
     void drawSettingsPanel(Graphics2D g, int ph) {

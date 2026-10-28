@@ -356,8 +356,12 @@ public class GoblinDoorsGUI extends JPanel {
     final Rectangle closeRect    = new Rectangle(390, 548, 180, 50);
     final Rectangle prevRect     = new Rectangle(140, 548, 170, 50);
     final Rectangle nextRect     = new Rectangle(650, 548, 170, 50);
+    final Rectangle aboutTabRect = new Rectangle(300, 126, 170, 42);
+    final Rectangle creditsTabRect = new Rectangle(490, 126, 170, 42);
     Panel panel = Panel.NONE;
     int tutPage;
+    boolean aboutCreditsTab;
+    int creditsPage;
     boolean fullscreen;
     final XInputController controller;
     boolean controllerConnected, controllerCursorVisible;
@@ -2242,6 +2246,12 @@ public class GoblinDoorsGUI extends JPanel {
             return 0;
         }
         if (panel != Panel.NONE) {
+            if (panel == Panel.INFO) {
+                if (aboutTabRect.contains(p)) return 16;
+                if (creditsTabRect.contains(p)) return 17;
+                if (aboutCreditsTab && creditsPage > 0 && prevRect.contains(p)) return 18;
+                if (aboutCreditsTab && creditsPage < 1 && nextRect.contains(p)) return 19;
+            }
             if (closeRect.contains(p)) return 5;
             if (panel == Panel.TUTORIAL) {
                 if (tutPage > 0 && prevRect.contains(p)) return 10;
@@ -2281,10 +2291,14 @@ public class GoblinDoorsGUI extends JPanel {
             case 13: setHomeMusicVolume(p); break;
             case 14: confirmingMenuExit = false; break;
             case 15: System.exit(0); break;
+            case 16: aboutCreditsTab = false; break;
+            case 17: aboutCreditsTab = true; break;
+            case 18: creditsPage = 0; break;
+            case 19: creditsPage = 1; break;
             case 6: panel = Panel.TUTORIAL; tutPage = 0; break;
             case 7: launchPractice(); break;
             case 8: panel = Panel.HELP; break;
-            case 9: panel = Panel.INFO; break;
+            case 9: panel = Panel.INFO; aboutCreditsTab = false; creditsPage = 0; break;
             case 10: tutPage = Math.max(0, tutPage - 1); break;
             case 11:
                 if (tutPage < TUT_TITLES.length - 1) tutPage++;
@@ -2511,22 +2525,85 @@ public class GoblinDoorsGUI extends JPanel {
             }
             menuButton(g, closeRect, "CLOSE", true, ph == 5);
         } else {
-            g.setFont(pixelFont(Font.BOLD, 36));
-            g.setColor(gold); centerText(g, "ABOUT", PW / 2, 168);
-            g.setFont(pixelFont(Font.BOLD, 20));
-            g.setColor(light);
-            int y = 215;
-            y = drawWrapped(g, "GOBLINS AND CAVERNS", tx, y, tw, 30) + 6;
-            g.setColor(light);
-            y = drawWrapped(g, "A forgetful mage wakes in a cavern and finds his belongings stolen. Follow the thief through dark cave "
-                + "entrances, recover five lost items, and uncover the truth behind the Curse of Mana.", tx, y, tw, 30) + 10;
-            g.setColor(cyan);
-            y = drawWrapped(g, "30 HP  -  2 Light Spells per round  -  usable items", tx, y, tw, 30) + 10;
-            g.setColor(new Color(170, 170, 200));
-            g.setFont(pixelFont(Font.BOLD, 16));
-            y = drawWrapped(g, "Made with Java Swing. All art is drawn in code. Runs in a 960 x 720 window or Fullscreen 1920 x 1080.", tx, y, tw, 26);
+            menuButton(g, aboutTabRect, "ABOUT", true,
+                aboutTabRect.contains(mouse) || !aboutCreditsTab);
+            menuButton(g, creditsTabRect, "CREDITS", true,
+                creditsTabRect.contains(mouse) || aboutCreditsTab);
+            if (aboutCreditsTab) drawCreditsPage(g, gold, light);
+            else {
+                g.setFont(pixelFont(Font.BOLD, 20));
+                g.setColor(light);
+                int y = 215;
+                y = drawWrapped(g, "GOBLINS AND CAVERNS", tx, y, tw, 30) + 6;
+                g.setColor(light);
+                y = drawWrapped(g, "A forgetful mage wakes in a cavern and finds his belongings stolen. Follow the thief through dark cave "
+                    + "entrances, recover five lost items, and uncover the truth behind the Curse of Mana.", tx, y, tw, 30) + 10;
+                g.setColor(cyan);
+                y = drawWrapped(g, "30 HP  -  2 Light Spells per round  -  usable items", tx, y, tw, 30) + 10;
+                g.setColor(new Color(170, 170, 200));
+                g.setFont(pixelFont(Font.BOLD, 16));
+                drawWrapped(g, "Made with Java Swing. All art is drawn in code. Runs in a 960 x 720 window or Fullscreen 1920 x 1080.", tx, y, tw, 26);
+            }
+            if (aboutCreditsTab && creditsPage > 0) menuButton(g, prevRect, "BACK", true, ph == 18);
             menuButton(g, closeRect, "CLOSE", true, ph == 5);
+            if (aboutCreditsTab && creditsPage < 1) menuButton(g, nextRect, "MORE", true, ph == 19);
         }
+    }
+
+    void drawCreditsPage(Graphics2D g, Color gold, Color light) {
+        Graphics2D content = (Graphics2D) g.create();
+        content.translate(0, creditsPage == 0 ? 24 : 48);
+        int bannerWidth = 240;
+        int bannerHeight = bannerWidth * menuBanner.getIconHeight() / menuBanner.getIconWidth();
+        content.drawImage(menuBanner.getImage(), (PW - bannerWidth) / 2, 176, bannerWidth, bannerHeight, null);
+        content.setFont(pixelFont(Font.BOLD, 17));
+        content.setColor(light);
+        centerText(content, "Computer Programming 1 Final Project", PW / 2, 251);
+
+        int leftX = 145, rightX = 505, colWidth = 310, y = 276;
+        if (creditsPage == 0) {
+            y = drawCreditSection(content, gold, light, "CORE CREATIVE & NARRATIVE", leftX, y, colWidth,
+                "Original Game Concept: Aeron Kayl Briones",
+                "Narrative & Story Writer: Joren Marie Angeles");
+            drawCreditSection(content, gold, light, "PROGRAMMING & DEVELOPMENT", leftX, y + 5, colWidth,
+                "GUI & Interface Developers: Charles Tria, Aeron Kayl Briones, Mary Grace Zosimo",
+                "Terminal & Core Logic Developers: Joren Marie Angeles, Aeron Kayl Briones, Charles Tria, Mary Grace Zosimo");
+
+            y = drawCreditSection(content, gold, light, "ART, AUDIO & PERFORMANCE", rightX, 276, colWidth,
+                "Visual Artists: Mary Grace Zosimo, Dyna Brez, Charles Tria",
+                "Voice Talent / Voice Over: Dyna Brez",
+                "Sound Engineering & Audio Design: Joren Marie Angeles, Charles Tria");
+            drawCreditSection(content, gold, light, "QUALITY ASSURANCE & PLAYTESTING", rightX, y + 5, colWidth,
+                "Quality Assurance Lead: Aeron Kayl Briones",
+                "Playtester: Gabriel Tejada");
+        } else {
+            drawCreditSection(content, gold, light, "ENGINE & LIBRARIES", leftX, y, colWidth,
+                "Core Language & GUI Framework: Java (Java Swing)");
+            drawCreditSection(content, gold, light, "ASSETS & ATTRIBUTIONS", leftX, y + 65, colWidth,
+                "Icon Assets: Sourced via Pinterest",
+                "Main Menu Theme / Audio: \"Home\" - The Longing OST",
+                "Sound Effects (SFX): Sourced via YouTube",
+                "Cave Ambience & Environmental Audio: Sourced via YouTube");
+            drawCreditSection(content, gold, light, "ACADEMIC ACKNOWLEDGMENTS & MENTORSHIP", rightX, y, colWidth,
+                "Course: Computer Programming 1",
+                "Instructor & Project Mentor: Richard Kim Sanchez",
+                "Department: College of Computer Studies");
+        }
+        content.dispose();
+        g.setFont(pixelFont(Font.BOLD, 13));
+        g.setColor(new Color(160, 160, 190));
+        centerText(g, "CREDITS " + (creditsPage + 1) + " / 2", PW / 2, 535);
+    }
+
+    int drawCreditSection(Graphics2D g, Color gold, Color light, String heading, int x, int y, int width,
+                          String... credits) {
+        g.setFont(pixelFont(Font.BOLD, 15));
+        g.setColor(gold);
+        y = drawWrapped(g, heading, x, y, width, 18) + 2;
+        g.setFont(pixelFont(Font.BOLD, 13));
+        g.setColor(light);
+        for (String credit : credits) y = drawWrapped(g, credit, x + 8, y, width - 8, 16) + 2;
+        return y + 5;
     }
 
     void drawTutorialArt(Graphics2D g, int page) {

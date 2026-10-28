@@ -260,6 +260,7 @@ public class GoblinDoorsGUI extends JPanel {
     int itemShow = -1;
     int itemDoor = -1;
     String endingName = "";
+    boolean endingExit;
     String doorPurpose = "";                         // "light" or "walk"
     final Random rng = new Random();
 
@@ -309,6 +310,7 @@ public class GoblinDoorsGUI extends JPanel {
     ImageIcon[] storyScenes;
     ImageIcon wizardCharacter;
     ImageIcon holyWizard;
+    ImageIcon rememberedWizard;
     ImageIcon goblinStartled;
     ImageIcon goblinNotStartled;
     ImageIcon snakeCharacter;
@@ -517,6 +519,7 @@ public class GoblinDoorsGUI extends JPanel {
         inventory.clear(); used.clear(); logs.clear(); queue.clear();
         roundNo = 0; spells = 2; maxSpells = 2; nDoors = 3; itemShow = -1; itemDoor = -1;
         sleeping = false; goblinVisible = false;
+        endingExit = false;
         Arrays.fill(types, PathType.SNAKE);
         resetCaves();
         flash = hurt = shake = 0;
@@ -763,7 +766,10 @@ public class GoblinDoorsGUI extends JPanel {
             say("He forgot that he had cursed himself... and began to believe someone else had."),
             say("His journey had never been about finding a cure."),
             say("It was about finding someone to undo a curse he had chosen to create."),
-            act(() -> inventory.add(SEAL)),
+            act(() -> {
+                inventory.add(SEAL);
+                audio.playItemReveal();
+            }),
             act(this::finalChoice)
         );
     }
@@ -792,6 +798,7 @@ public class GoblinDoorsGUI extends JPanel {
                 say(remove ? "He will carry the guilt, but this time he will protect people, just as he promised."
                            : "Not as a punishment he forgot, but as a weight he chooses to carry knowingly."),
                 say("He turns toward the exit. Before he completely leaves the cave, one last message appears:"),
+                act(() -> endingExit = true),
                 sys("CAVERN CLEARED."),
                 sys("OBJECTIVE COMPLETE: REMEMBER."),
                 endStep()
@@ -1073,6 +1080,7 @@ public class GoblinDoorsGUI extends JPanel {
         };
         wizardCharacter = GameAssets.loadImage("images/wizard_cs.gif");
         holyWizard = GameAssets.loadImage("images/holyWizard.gif");
+        rememberedWizard = GameAssets.loadImage("images/wizardRemembered.gif");
         goblinStartled = GameAssets.loadImage("images/goblinStartled.gif");
         goblinNotStartled = GameAssets.loadImage("images/goblinNotStartled.gif");
         snakeCharacter = GameAssets.loadImage("images/snake.gif");
@@ -1757,7 +1765,7 @@ public class GoblinDoorsGUI extends JPanel {
             int bx = i * 40 + 6 + (i % 2) * 10, base = 114, h = 36 + (i * 13) % 20;
             g.fillPolygon(new int[]{bx - 12, bx, bx + 12}, new int[]{base, base - h, base}, 3);
         }
-        drawMage(g, 144, 76, 2);
+        drawWizard(g, endingExit ? rememberedWizard : wizardCharacter, 144, 76, 2);
         if (forgive) {
             for (int k = 0; k < 22; k++) {
                 int px = 100 + (k * 37) % 120;

@@ -1,46 +1,68 @@
-import java.util.*;
+import java.util.Scanner;
 
-/**
- * GOBLIN DOORS - Dungeon of Paths
- * Console text-adventure. Pure Java (java.util only).
- * Compile: javac GoblinDoors.java
- * Run:     java GoblinDoors
- */
 public class GoblinDoors {
 
-    static final Scanner in = new Scanner(System.in);
-    static final Random rng = new Random();
+    static Scanner in = new Scanner(System.in);
+    
+    static int hp = 3;
+    static String[] inventory = new String[5];  
+    static int itemCount = 0;
 
-    // ---------- Game state ----------
-    static int mana = 100;
-    static final List<String> inventory = new ArrayList<>();
-    static final List<String> recovered = new ArrayList<>();
+    static final int ITEM = 0;
+    static final int TRAP = 1;
 
-    // ---------- Item data (index = round - 1) ----------
-    static final String[] ITEMS = {"Mana Potion", "Map of the Village", "Grimoire", "Old Charm"};
-    static final String[] MEMORIES = {
+    static String[] ITEMS = {"Mana Potion", "Map of the Village", "Grimoire", "Old Charm", "Curse's Seal"};
+    static String[] MEMORIES = {
         "A voice echoes: \"Promise me you'll use your magic to protect people.\"",
         "The village you are traveling to... you have been there before.",
         "The Grimoire shows you a spell you once used. Your hands remember it.",
-        "The Old Charm was given to you by your master. You remember their smile."
+        "The Old Charm was given to you by your master. You remember their smile.",
+        "The Seal pulses in his hand. The darkness around him fades, and he only sees himself..."
     };
-    static final String[] MEMORY_NOTES = {
-        "The potion reminds you of the days your mana began disappearing.",
+    static String[] MEMORY_NOTES = {
+        "The potion reminds you of the days your magic began disappearing.",
         "Why would you forget a place you once visited?",
         "That spell was far too strong...",
-        "\"Be careful, my student. Power is not the same as control.\""
+        "\"Be careful, my student. Power is not the same as control.\"",
+        "Not who he is now, but someone from the past."
     };
 
-    enum PathType { ITEM, TRAP, DEAD_END }
-
-    // ---------- Helpers ----------
     static void pause(int ms) {
-        try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+        }
     }
 
-    static void say(String s) { System.out.println(s); pause(700); }
-    static void sys(String s) { System.out.println("  [" + s + "]"); pause(450); }
-    static void line() { System.out.println("------------------------------------------"); }
+    static void say(String s) {
+        System.out.println(s);
+        pause(700);
+    }
+
+    static void sys(String s) {
+        System.out.println("  [" + s + "]");
+        pause(450);
+    }
+
+    static void line() {
+        System.out.println("------------------------------------------");
+    }
+
+    static void addItem(String item) {
+        inventory[itemCount] = item;
+        itemCount++;
+    }
+
+    static void printInventory() {
+        System.out.print("[");
+        for (int i = 0; i < itemCount; i++) {
+            System.out.print(inventory[i]);
+            if (i < itemCount - 1) {
+                System.out.print(", ");
+            }
+        }
+        System.out.println("]");
+    }
 
     static boolean askYesNo(String question) {
         sys(question);
@@ -54,12 +76,23 @@ public class GoblinDoors {
         }
     }
 
-    /** Asks for a path number among the still-open paths. */
+    static String roman(int i) {
+        switch (i) {
+            case 0: return "I";
+            case 1: return "II";
+            case 2: return "III";
+            case 3: return "IV";
+            default: return "V";
+        }
+    }
+
     static int askPath(String question, boolean[] open) {
         sys(question);
-        StringBuilder opts = new StringBuilder("OPTIONS: ");
-        for (int i = 0; i < 3; i++) if (open[i]) opts.append(roman(i)).append(" ");
-        sys(opts.toString().trim());
+        String opts = "OPTIONS:";
+        for (int i = 0; i < open.length; i++) {
+            if (open[i]) opts = opts + " " + roman(i);
+        }
+        sys(opts);
         while (true) {
             System.out.print("> ");
             String s = in.nextLine().trim().toUpperCase();
@@ -68,32 +101,31 @@ public class GoblinDoors {
                 case "I": case "1": idx = 0; break;
                 case "II": case "2": idx = 1; break;
                 case "III": case "3": idx = 2; break;
+                case "IV": case "4": idx = 3; break;
+                case "V": case "5": idx = 4; break;
             }
-            if (idx >= 0 && open[idx]) return idx;
+            if (idx >= 0 && idx < open.length && open[idx]) return idx;
             System.out.println("  Invalid or closed path. Try again.");
         }
     }
 
-    static String roman(int i) { return new String[]{"I", "II", "III"}[i]; }
-
-    static void showMana() {
-        sys("MANA: " + mana + "/100");
+    static void showHp() {
+        sys("HP: " + hp + "/3");
     }
 
     static void gameOver() {
         line();
-        say("Your mana runs dry. The darkness swallows the mage...");
+        say("His strength fails. The darkness swallows the mage...");
         sys("GAME OVER");
         System.exit(0);
     }
 
-    static void loseMana(int amt) {
-        mana = Math.max(0, mana - amt);
-        showMana();
-        if (mana == 0) gameOver();
+    static void loseHp() {
+        hp--;
+        showHp();
+        if (hp == 0) gameOver();
     }
 
-    // ---------- Story parts ----------
     static void intro() {
         line();
         System.out.println("          G O B L I N   D O O R S");
@@ -104,99 +136,124 @@ public class GoblinDoors {
         say("");
         say("But after hours of walking, he still can't find the way out. Night has come.");
         say("He finds a cave and sets down his things:");
-        inventory.addAll(Arrays.asList("Mana Potion", "Map of the Village", "Grimoire", "Old Charm", "Curse's Seal"));
-        for (String it : inventory) sys(it);
+        addItem("Mana Potion");
+        addItem("Map of the Village");
+        addItem("Grimoire");
+        addItem("Old Charm");
+        addItem("Curse's Seal");
+        for (int i = 0; i < itemCount; i++) sys(inventory[i]);
         say("He rests... until his eyes grow heavy.");
         say("");
         say("*Rustle.*");
         say("His eyes snap open. His belongings are gone!");
-        inventory.clear();
+        itemCount = 0;
         say("Luckily, the thief was careless. Small footprints lead deeper into the cave.");
         System.out.println();
         say("The deeper he goes, the darker it becomes.");
         say("He casts \"Lumen\". A faint light appears above his palm.");
         say("\"I can't keep doing this,\" he mutters.");
-        loseMana(5);
-        say("The footprints suddenly disappear. The cave splits into three paths, each leading into darkness.");
+        say("The footprints suddenly disappear. The cave splits into paths, each leading into darkness.");
         System.out.println();
         sys("A traveler has entered the Dungeon of Paths");
         sys("Objective: Retrieve the stolen belongings.");
         sys("Rule: Choose ONE path at every junction.");
-        sys("Warning: Not every path leads to the thief.");
+        sys("Warning: Only one path leads to the thief's loot. Wrong paths cost 1 HP.");
+        showHp();
         say("\"...What?\"");
     }
 
-    /** One normal round. Returns after the item is found. */
+    static int[] makePaths(int count) {
+        int[] paths = new int[count];
+        for (int i = 0; i < count; i++) {
+            paths[i] = TRAP;
+        }
+        paths[0] = ITEM;
+        for (int i = count - 1; i > 0; i--) {
+            int j = (int) (Math.random() * (i + 1));
+            int t = paths[i];
+            paths[i] = paths[j];
+            paths[j] = t;
+        }
+        return paths;
+    }
+
     static void playRound(int round) {
+   
+        int pathCount = 3;
+        int maxSpells = 1;
+        if (round >= 3) {
+            pathCount = 5;
+            maxSpells = 2;
+        }
+        int spells = maxSpells;
+
         line();
         sys("ROUND " + round);
-        int spells = 2;
-        sys("VISION SPELLS: " + spells + "/2");
+        sys("PATHS: " + pathCount);
+        sys("VISION SPELLS: " + spells + "/" + maxSpells);
+        showHp();
         if (round == 2) sys("WARNING: Your memories may affect your choices.");
         if (round == 1) sys("Tip: Use your magic wisely.");
 
-        // Randomly assign path types: exactly one item, one trap, one dead end
-        PathType[] paths = {PathType.ITEM, PathType.TRAP, PathType.DEAD_END};
-        for (int i = paths.length - 1; i > 0; i--) {
-            int j = rng.nextInt(i + 1);
-            PathType t = paths[i]; paths[i] = paths[j]; paths[j] = t;
+        
+        int[] paths = makePaths(pathCount);
+        boolean[] open = new boolean[pathCount];
+        for (int i = 0; i < pathCount; i++) {
+            open[i] = true;
         }
-        boolean[] open = {true, true, true};
         boolean found = false;
 
         while (!found) {
-            // --- Vision phase ---
             boolean chosen = false;
             while (spells > 0 && !chosen) {
                 if (!askYesNo("Use Vision Spell?")) break;
                 int v = askPath("Which path would you like to uncover?", open);
                 spells--;
-                loseMana(5);
                 sys("Vision Spell Used");
-                sys("Remaining Spells: " + spells + "/2");
+                sys("Remaining Spells: " + spells + "/" + maxSpells);
                 switch (paths[v]) {
-                    case ITEM:     say("The darkness fades. You glimpse something glinting on the floor of path " + roman(v) + "..."); break;
-                    case TRAP:     say("The darkness fades. Path " + roman(v) + " is full of whispering, hungry shadows..."); break;
-                    case DEAD_END: say("The darkness fades. Path " + roman(v) + " ends in a solid wall of stone..."); break;
+                    case ITEM:
+                        say("The darkness fades. You glimpse something glinting on the floor of path " + roman(v) + "...");
+                        break;
+                    case TRAP:
+                        say("The darkness fades. Path " + roman(v) + " is full of whispering, hungry shadows...");
+                        break;
                 }
                 say("The vision fades little by little.");
                 sys("VISION ENDED");
-                if (askYesNo("Would you like to choose the path you'll walk on?")) chosen = true;
-                else if (spells > 0) sys("Remaining Vision Spells: " + spells + "/2");
+                if (askYesNo("Would you like to choose the path you'll walk on?")) {
+                    chosen = true;
+                } else if (spells > 0) {
+                    sys("Remaining Vision Spells: " + spells + "/" + maxSpells);
+                }
             }
             if (spells == 0 && !chosen) sys("No Vision Spells left. You must choose.");
 
-            // --- Walk phase ---
             int p = askPath("Which path would you like to walk on?", open);
             say("He walks through tunnel " + roman(p) + "...");
             switch (paths[p]) {
                 case ITEM:
                     found = true;
                     String item = ITEMS[round - 1];
-                    inventory.add(item);
+                    addItem(item);
                     say("He finds his item on the floor: " + item + "!");
                     sys("One item recovered");
-                    sys((5 - inventory.size()) + " items remaining.");
+                    sys((5 - itemCount) + " items remaining.");
                     say("");
                     say("Upon touching it, a memory flashes through his mind...");
                     say(MEMORIES[round - 1]);
                     say(MEMORY_NOTES[round - 1]);
                     break;
                 case TRAP:
-                    say("Shadows claw at him! His mana is drained, and he stumbles back to the junction.");
-                    loseMana(20);
+                    say("Shadows claw at him! He is hurt, and stumbles back to the junction.");
                     open[p] = false;
-                    break;
-                case DEAD_END:
-                    say("A dead end. He wastes energy turning back to the junction.");
-                    loseMana(10);
-                    open[p] = false;
+                    loseHp();
                     break;
             }
         }
     }
 
-    static void finalRound() {
+    static void finalIntro() {
         line();
         say("Each round leads him deeper into the cave.");
         say("With every item he retrieves, another piece of his forgotten past returns.");
@@ -207,12 +264,9 @@ public class GoblinDoors {
         say("The thief doesn't move. Then it suddenly vanishes.");
         System.out.println();
         sys("THE FINAL ROUND");
-        sys("VISION SPELLS: 1/1");
-        sys("One final path available");
-        askYesNo("Use the last Vision Spell?");   // answer doesn't matter: there is only one path
-        say("He uses the last vision spell.");
-        say("The darkness disappears, but he only sees himself...");
-        say("Not who he is now, but someone from the past.");
+    }
+
+    static void finalMemory() {
         System.out.println();
         sys("The Forgotten Memory");
         say("He remembers. He had once been a powerful mage.");
@@ -226,7 +280,6 @@ public class GoblinDoors {
         say("He forgot that he had cursed himself... and began to believe someone else had.");
         say("His journey had never been about finding a cure.");
         say("It was about finding someone to undo a curse he had chosen to create.");
-        inventory.add("Curse's Seal");
     }
 
     static void finalChoice() {
@@ -246,7 +299,7 @@ public class GoblinDoors {
         System.out.println();
         if (remove) {
             say("[ENDING: Forgiveness]");
-            say("He breaks the seal. Mana floods back, warm and steady.");
+            say("He breaks the seal. Magic floods back, warm and steady.");
             say("He will carry the guilt, but this time he will protect people, just as he promised.");
         } else {
             say("[ENDING: Atonement]");
@@ -259,17 +312,21 @@ public class GoblinDoors {
         sys("DUNGEON CLEARED.");
         sys("OBJECTIVE COMPLETE: REMEMBER.");
         line();
-        System.out.println("Items recovered: " + inventory);
-        System.out.println("Mana left: " + mana + "/100");
+        System.out.print("Items recovered: ");
+        printInventory();
+        System.out.println("HP left: " + hp + "/3");
         System.out.println("THANK YOU FOR PLAYING!");
     }
 
-    // ---------- Main ----------
     public static void main(String[] args) {
         intro();
-        for (int r = 1; r <= 4; r++) playRound(r);
-        finalRound();
+        for (int r = 1; r <= 5; r++) {
+            if (r == 5) finalIntro();
+            playRound(r);
+        }
+        finalMemory();
         finalChoice();
         in.close();
     }
-}
+    }
+        

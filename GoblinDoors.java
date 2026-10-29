@@ -2,6 +2,17 @@ import java.util.Scanner;
 
 public class GoblinDoors {
 
+     public static void main(String[] args) {
+        intro();
+        for (int r = 1; r <= 5; r++) {
+            if (r == 5) finalIntro();
+            playRound(r);
+        }
+        finalMemory();
+        finalChoice();
+        in.close();
+    }
+    
     static Scanner in = new Scanner(System.in);
     
     static int hp = 3;
@@ -216,7 +227,7 @@ public class GoblinDoors {
                         say("The darkness fades. You glimpse something glinting on the floor of path " + roman(v) + "...");
                         break;
                     case TRAP:
-                        say("The darkness fades. Path " + roman(v) + " is full of whispering, hungry shadows...");
+                        say("The darkness fades. Path " + roman(v) + " is full of hissing, hungry snakes...");
                         break;
                 }
                 say("The vision fades little by little.");
@@ -245,7 +256,7 @@ public class GoblinDoors {
                     say(MEMORY_NOTES[round - 1]);
                     break;
                 case TRAP:
-                    say("Shadows claw at him! He is hurt, and stumbles back to the junction.");
+                    say("The snake strikes at him! He is hurt, and stumbles back to the junction.");
                     open[p] = false;
                     loseHp();
                     break;
@@ -318,15 +329,5 @@ public class GoblinDoors {
         System.out.println("THANK YOU FOR PLAYING!");
     }
 
-    public static void main(String[] args) {
-        intro();
-        for (int r = 1; r <= 5; r++) {
-            if (r == 5) finalIntro();
-            playRound(r);
-        }
-        finalMemory();
-        finalChoice();
-        in.close();
-    }
-    }
-        
+   
+}
